@@ -7,8 +7,15 @@ Description :
 ====================================================================================================
 """
 
-# Initialisiere Schnittstelle zu Messgerät
+# Verbindung aufbauen
+# wahrscheinlich muss zwischen linux und windows unterschieden werden
 
-# Sende Befehl
+# Init Setup
 
-# Empfange Daten
+# Init Frequency Block
+
+# Set FrontEnd Settings
+
+# Start Measurement
+
+# Receive Data
