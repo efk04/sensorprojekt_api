@@ -35,3 +35,4 @@ KW 28 |
 #### Messwerte in Echtzeit darstellen
 * Daten in Echtzeit auslesen
 * Daten in Echtzeit aufarbeiten & darstellen
+test
