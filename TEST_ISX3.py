@@ -2,7 +2,7 @@ import struct
 import serial
 import serial.tools.list_ports
 import csv
-import check_User_Input as input_user
+import test_check_User_Input as input_user
 import time
 
 

@@ -6,11 +6,17 @@ device = ISX3()
 device.connect_device_fs("COM3")
 
 #Testbefehl
-get_device_id = bytearray([0xD1, 00, 0xD1])
-device.write_command_string(get_device_id)
+#get_device_id = bytearray([0xD1, 00, 0xD1])
+#device.write_command_string(get_device_id)
+
+#get_fs_settings = bytearray([0xB0,0x03, 0x01, 0x01, 0x00, 0xB0])
+get_fs_settings = bytearray([0xB1, 00, 0xB1])
+device.write_command_string(get_fs_settings)
+
+
 
 #get ethernet configuration
-
+"""
 get_IP_adress = bytearray ([0xBE,0x01,0x01,0xBE])
 get_MAC_adress = bytearray ([0xBE,0x01,0x02,0xBE])
 
@@ -20,4 +26,4 @@ print("MAC-Adresse: ")
 device.write_command_string(get_MAC_adress)
 
 device.get_ip_address()
-
+"""
