@@ -4,6 +4,7 @@ import serial.tools.list_ports
 import csv
 import test_check_User_Input as input_user
 import time
+import socket
 
 
 MSG_DICT = {
@@ -29,6 +30,7 @@ class ISX3:
         self.frequency_points = 0
         self.ret_hex_int = None
         self.print_msg = True
+        self.tcp_protocol = None
 
     def is_port_available(self, port: str) -> bool:
         """
@@ -75,7 +77,65 @@ class ISX3:
                 print(f"Successfully Connected to {self.device.name}. \n")
             except serial.SerialException as e:
                 print("Error: ", e)
-    
+    """def connect_device_lan (
+            self, 
+            host: str,
+            port: int = 5000,
+            local_bind: str | None = None,
+            timeout: float = 5.0,
+            retries: int = 1,
+            retry_backoff: float = 2.0 ):
+        
+
+        
+        connects to device via LAN
+        Args: HOST: IP_Address of device
+              Port: If static IP address is used: PORT=5000
+                    If DHCP is used: PORT=8888 
+         serial.SerialException: If the connection cannot be established.
+        
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            if local_bind:
+                sock.bind((local_bind, 0))  # port 0 -> ephemeral local port
+
+        if hasattr(self, "tcp_protocol") and self.tcp_protocol is not None:
+            print(f"TCP connection already defined as {self.tcp_protocol}.")
+            return self.device
+# Set non-blocking and start connect (connect_ex returns errno or 0)
+
+
+
+        self.tcp_protocol = "TCP"
+
+        attempt = 0
+        while attempt < retries:
+            attempt += 1
+            try:
+                print(f"Attempt {attempt}/{retries}: connecting to {host}:{port} (timeout={timeout}s)...")
+                sock = socket.create_connection((host, port), timeout=timeout)
+                sock.settimeout(None)  # switch to blocking mode for subsequent recv/send
+                self.device = sock
+                print(f"Successfully connected to {host}:{port}")
+                return sock
+            except (ConnectionRefusedError, TimeoutError) as e:
+                print(f"Connection attempt {attempt} failed: {e}")
+                if attempt < retries:
+                    wait = retry_backoff ** (attempt - 1)
+                    print(f"Retrying in {wait} s...")
+                    time.sleep(wait)
+                else:
+                    print("Max retries reached. Giving up.")
+            except OSError as e:
+                print(f"OS error during connect: {e}")
+                break
+
+        # cleanup / reset state
+        self.tcp_protocol = None
+        self.device = None
+        return None"""
     def system_message_callback_usb_fs(self):
         """
         Reads system messages from the serial buffer and interprets them.
