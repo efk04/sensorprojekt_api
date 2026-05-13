@@ -9,7 +9,7 @@ device.connect_device_fs("COM3")
 #Testbefehl
 #get_device_id = bytearray([0xD1, 00, 0xD1])
 #device.write_command_string(get_device_id)
-"""
+
 def command_save_settings():
     return bytearray([0x90, 0x00, 0x90])
 
