@@ -5,7 +5,6 @@ import csv
 import check_User_Input as input_user
 import time
 
-
 MSG_DICT = {
     "0x01": "No message inside the message buffer",
     "0x02": "Timeout: Communication-timeout (less data than expected)",
@@ -19,7 +18,6 @@ MSG_DICT = {
 }
 
 class ISX3:
-
     def __init__(self) -> None:
         """
                     Initializes an ISX3 device handler.
@@ -42,6 +40,7 @@ class ISX3:
         """
         available_ports = [p.device for p in serial.tools.list_ports.comports()]
         return port in available_ports
+
     def connect_device_fs(self, port: str):
             """
             Connects to the ISX3 device via the specified serial port (USB full-speed).

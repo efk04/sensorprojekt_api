@@ -20,4 +20,3 @@ print("MAC-Adresse: ")
 device.write_command_string(get_MAC_adress)
 
 device.get_ip_address()
-
