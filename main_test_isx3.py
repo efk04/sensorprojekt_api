@@ -74,7 +74,3 @@ device.write_command_string(get_IP_adress)
 print("MAC-Adresse: ")
 device.write_command_string(get_MAC_adress)
 
-<<<<<<< HEAD
-device.get_ip_address()
-=======
->>>>>>> 8646d753a6e23b4ce14db3ba07fee8a9d791dba8
