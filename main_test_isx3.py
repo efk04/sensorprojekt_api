@@ -1,6 +1,5 @@
 ### IMPORTS ###
 import time
-from unittest import case
 import serial
 
 from TEST_ISX3 import ISX3
@@ -29,13 +28,12 @@ def read_answer():
     return received_hex
 
 def convert_timestamp_option(option):
-    print("Option: ", option)
     match option:
-        case "0x0":
+        case 0x00:
             return("disabled")
-        case "0x01":
+        case 0x01:
             return("ms")
-        case "0x02":
+        case 0x02:
             return("us")
 
 def get_ethernet_config():
@@ -58,20 +56,27 @@ def get_full_options():
     result[1:5] = answer[3:7]
     result[5:9] = answer[7:11]
     
-    #device.write(command.get_options(0x04))     # defekt
-    #result[3] = read_answer()[3]
-    #print(read_answer())
+    device.write(command.get_options(0x04))     # defekt
+    result[3] = read_answer()[3]
+    print(read_answer())
     return result
 
-def print_main_menu():
+def main_menu():
     print("Mainmenu:")
     print("1 => Options")
     print("2 => Measuring")
+    userinput = input("Please select an option: ")
+    return userinput
 
-def print_options_menu(options):
+def options_menu():
+    options = get_full_options()
     print("Options:")
-    print("1 => Time stamp: ", convert_timestamp_option(options[0]))
+    print("1 => Time stamp: ", options[0])
     print("2 => Frequency range: ", options[1:5], "Hz - ", options[5:9], "Hz")
+    print("3 => Current range: ", options[1:5], "Hz - ", options[5:9], "Hz")
+
+    userinput = input("Please select an option: ")
+    return userinput
 
 def print_timestamp_menu():
     print("Time stamp options:")
@@ -86,39 +91,21 @@ def print_frequency_menu():
 
 
 ### MAIN ###
-
 # Verbindungsaufbau
 #device = ISX3()
 device = serial.Serial(port="COM3", baudrate=115200, timeout=1)
 #device.connect_device_fs("COM3")
 
-menu = 0
+device.write(command.get_options(0x04))     # defekt
+result = read_answer()
+print(result)
 
-
-
-
-# Hauptmenü
-print_main_menu()
-userinput = input("Please select an option: ")
-
-match userinput:
-    
-    case "1":
-        options = get_full_options()
-        
-        print_options_menu(options)
-        userinput = input("Change an option: ")
-        
-        if userinput == "1":
-            print_timestamp_menu()
-            userinput = input("Select a time stamp option: ")
-            device.write(command.set_option(0x01, int(userinput)))
-    
-    
-    case "2":
-        print("Measuring:")
-
-
+"""
+while True:
+    userinput = main_menu()
+    match userinput:
+        case "1":
+            userinput = options_menu()
+"""
+            
 #device.write_command_string(command.set_option(0x01, 0x01))
-
-
