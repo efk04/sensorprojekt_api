@@ -8,13 +8,13 @@ import command_functions as command
 
 
 ### FUNCTIONS ###
-def read_answer():
+def read_answer(dev):
     timeout_count = 0
     received = []
     data_count = 0
 
     while True:
-        buffer = device.read()
+        buffer = dev.read()
         if buffer:
             received.extend(buffer)
             data_count += len(buffer)
@@ -26,6 +26,7 @@ def read_answer():
             break
     received_hex = [hex(receive) for receive in received]        
     return received_hex
+    #return bytearray(int(h, 16) for h in received_hex)
 
 def convert_timestamp_option(option):
     match option:
@@ -93,12 +94,12 @@ def print_frequency_menu():
 ### MAIN ###
 # Verbindungsaufbau
 #device = ISX3()
-device = serial.Serial(port="COM3", baudrate=115200, timeout=1)
+#device = serial.Serial(port="COM3", baudrate=115200, timeout=1)
 #device.connect_device_fs("COM3")
 
-device.write(command.get_options(0x04))     # defekt
-result = read_answer()
-print(result)
+#device.write(command.get_options(0x04))     # defekt
+#result = read_answer(device)
+#print(result)
 
 """
 while True:
@@ -109,3 +110,4 @@ while True:
 """
             
 #device.write_command_string(command.set_option(0x01, 0x01))
+#device.close()
