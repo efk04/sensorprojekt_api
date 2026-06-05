@@ -104,8 +104,22 @@ device.set_fs_settings(
    'autoranging' , #current_measurement_range (str): Current measurement range (e.g., "10mA")
    '1V' , #voltage_measurement_range (str): Voltage measurement range (e.g., "1V")
 )
+
+
 #add single frequency
-device.set_setup(
+
+device.set_setup_single_frequency_point(
+    1000.0,  #frequency (float or str): Frequency point for single frequency measurement
+    1.0, #precision (float): Measurement precision
+    0.25, #amplitude (str or float): Signal amplitude
+    'voltage' #excitation_type (str): Type of excitation, "voltage" or "current"
+)
+#Wir können nur eine Einzelfrequenz oder eine Frequenzliste (min-max, n-steps, scale) in das setup laden 
+#z.B eine zweite Einzelfrequenz in das Setup hinzuzufügen ist nicht möglich
+#genauso werden mehrere Frequenzlisten genauso zusammengefasst
+"""
+#add frequency sweep
+device.set_setup_frequency_sweep(
      100.0,             #start_frequency (float or str): Starting frequency
      1000000.0,         #end_frequency (float or str): Ending frequency, e.g
      100,             #count (int): Number of frequency points
@@ -115,6 +129,7 @@ device.set_setup(
      0.25,            #amplitude (str or float): Signal amplitude
      'voltage'        #excitation_type (str): Type of excitation
     )
+"""
 
 device.save_settings()
 

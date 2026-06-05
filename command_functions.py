@@ -6,6 +6,12 @@ Version: 0.1
 Description: Implemantierung der Commands zur Ansteuerung des ISX3-Gerät.
 """
 
+
+
+
+
+
+
 def save_settings():
     return bytearray([0x90, 0x00, 0x90])
 
@@ -54,3 +60,8 @@ def set_setup(length, ob, cd):
         case 0x05: #Set amplitude
             return bytearray([COMMAND_CODE, length, 0x05, cd, COMMAND_CODE])
     """
+
+
+
+def start_measure():
+    return bytearray([0xB8, 0x02, 0x01, 0x00, 0xB8])

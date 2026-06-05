@@ -350,11 +350,50 @@ class ISX3:
                 print("No valid B1 frame found for this channel.")
         print("\n")
 
-    def set_setup(self, start_frequency, end_frequency, count, scale, precision, amplitude, excitation_type):
+    def set_setup_single_frequency_point(self,single_frequency_point, precision, amplitude, excitation_type):
+        """
+                Configures the measurement setup parameters for a single frequency point.
+    
+                Args:
+                   
+                    single_frequency_point (float or str): Frequency point for single frequency measurement.
+                    precision (float): Measurement precision.
+                    amplitude (str): Signal amplitude.
+                    excitation_type (str): Type of excitation, "voltage" or "current".
+                """
+        self.print_msg = False
+        # resets the setup
+        self.device.write(bytearray([0x86, 0x01, 0x01, 0x86]))
+
+        self.frequency_points = 1
+
+        frequency_data = input_user.check_single_frequency_point(single_frequency_point)
+
+        settings_formatted = [0xB6, 0x0D, 0x02]
+
+        for data in frequency_data:
+            settings_formatted.append(data)
+
+        for data in input_user.check_precision(precision):
+            settings_formatted.append(data)
+
+        for data in input_user.check_amplitude(amplitude, excitation_type):
+            settings_formatted.append(data)
+
+        settings_formatted.append(0xB6)
+        settings_formatted = bytearray(settings_formatted)
+             
+        print(settings_formatted.hex())
+        self.write_command_string(settings_formatted)
+        print("Set the setup. \n")
+
+
+    def set_setup_frequency_sweep(self, start_frequency, end_frequency, count, scale, precision, amplitude, excitation_type):
         """
                 Configures the measurement setup parameters such as frequency range and signal characteristics.
-
+    
                 Args:
+                   
                     start_frequency (str): Starting frequency, e.g., "1kHz".
                     end_frequency (str): Ending frequency, e.g., "10MHz".
                     count (int): Number of frequency points.
@@ -414,10 +453,13 @@ class ISX3:
 
         #starts the measuring
         self.device.write(bytearray([0xB8, 0x03, 0x01, 0x00, spectra, 0xB8]))
-
+        Ergebnis = self.device.read(12)
+        print("Messung :",Ergebnis)
+    
         # Reads the Data
         results = self.read_measurement_data(expected_results=expected_results, timeout=10.0)
-
+        
+        print("Ergebnis:", results)
         self.system_message_callback_usb_fs()  # read ACK or NACK
 
         # Write to CSV
@@ -453,6 +495,7 @@ class ISX3:
 
         while time.time() - start < timeout and len(results) < expected_results:
             byte = self.device.read(1)
+        
             if byte:
                 buffer.append(byte[0])
 
