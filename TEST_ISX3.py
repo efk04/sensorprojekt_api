@@ -2,6 +2,8 @@ import struct
 import serial
 import serial.tools.list_ports
 import csv
+
+from shapely import buffer
 import test_check_User_Input as input_user
 import time
 import socket
@@ -76,6 +78,10 @@ class ISX3:
                 print(f"Successfully Connected to {self.device.name}. \n")
             except serial.SerialException as e:
                 print("Error: ", e)
+
+        
+            self.system_message_callback_usb_fs()
+
     """def connect_device_lan (
             self, 
             host: str,
@@ -181,6 +187,7 @@ class ISX3:
         elif self.ret_hex_int == "both":
             return received, received_hex
         return None
+    
 
     def write_command_string(self, command):
         """
@@ -231,7 +238,9 @@ class ISX3:
         ext = [0x00, 0x00]
 
         # Build command based on measurement mode
-        if mode == 0x01:  # 2-point
+        command = [0xB0, 0x04, mode, channel_code ,current_range, voltage_range, 0xB0]
+        print(command)
+        """if mode == 0x01:  # 2-point
             command = [
                 0xB0, 0x09, mode, current_range, voltage_range,
                 channel_code, *ext,  # C channel
@@ -257,12 +266,12 @@ class ISX3:
             ]
         else:
             print("Unsupported measurement mode. Aborting.")
-            return
+            return"""
 
-        self.device.write(bytearray(command))
-        response = self.device.read(4)
-        print("Response from device: ", response)
-        print("FS settings applied.\n")
+        self.write_command_string(bytearray(command))
+        #response = self.device.read(4)
+        #print("Response from device: ", response)
+        #print("FS settings applied.\n")
 
     def get_fs_settings(self):
         self.device.reset_input_buffer()
@@ -379,7 +388,7 @@ class ISX3:
             settings_formatted.append(data)
 
         settings_formatted.append(0xB6)
-
+        print(settings_formatted)
         self.write_command_string(bytearray(settings_formatted))
 
         print("Set the setup. \n")
@@ -501,3 +510,13 @@ class ISX3:
         print(f"   Frame:     {response.hex()}")
         
         return ip_str
+    
+    def save_settings(self):
+        self.write_command_string(bytearray([0x90, 0x00, 0x90]))
+
+    def get_setup(self):
+        self.write_command_string(bytearray([0xB7, 0x01, 0x01, 0xB7]))
+ 
+    def get_fe_settings(self):
+        self.write_command_string(bytearray([0xB1, 0x00, 0xB1]))
+        
