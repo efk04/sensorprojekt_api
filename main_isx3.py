@@ -6,7 +6,7 @@ from TEST_ISX3 import ISX3
 import command_functions as command
 
 
-
+device = 0
 ### FUNCTIONS ###
 def read_answer(dev):
     timeout_count = 0
