@@ -1,9 +1,10 @@
+# Darstellung der Messergebnisse aus der CSV-Datei
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
 # CSV-Datei laden
-file_path = r"C:\Users\turbo\OneDrive\Dokumente\Studium\HTWK\Sensorprojekt\measurement_results.csv"
+file_path = "measurement_results.csv"
 df = pd.read_csv(file_path)
 
 # Frequenzachse erzeugen:
