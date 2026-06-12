@@ -155,6 +155,25 @@ def float_to_bytes(value: float) -> list:
         """
     return list(struct.pack(">f", value))
 
+def check_single_frequency_point (frequency: float):
+    """ 
+        Validates a single frequency point and converts it to byte representation.
+        Args:
+            frequency (float or str): Frequency input.
+            Returns:
+            4 byte frequency
+        
+        """
+    single_frequency_point = parse_frequency(frequency)
+
+    min_frequency = 0.1 #AC Messung -> untere Mesgerätgrenze: 100mHz
+    max_frequency = 10000000.0 #Obere Messgerätgrenze: 10MHz
+    
+    if single_frequency_point > max_frequency or single_frequency_point < min_frequency:
+        print("frequency out of range. No AC-Measurment possible. Chose a frequnecy between 0.1 Hz and 10 MHz.")
+    
+    return float_to_bytes(single_frequency_point)
+
 def check_frequency_range(start_frequency: float, end_frequency: float):
     """
         Validates frequency range and converts to byte representation.

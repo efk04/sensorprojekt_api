@@ -93,13 +93,61 @@ def print_frequency_menu():
 
 ### MAIN ###
 # Verbindungsaufbau
-#device = ISX3()
+device = ISX3()
 #device = serial.Serial(port="COM3", baudrate=115200, timeout=1)
-#device.connect_device_fs("COM3")
+device.connect_device_fs("COM3")
+
+
+#get_ethernet_config()
+
+device.set_fs_settings(
+    4, #measurement_mode (int): Measurement mode (1=2-point, 2=4-point, 3=3-point)
+   "bnc port" , #measurement_channel (str): Measurement channel to use (e.g., "Main Port")
+   'autoranging' , #current_measurement_range (str): Current measurement range (e.g., "10mA")
+   '1V' , #voltage_measurement_range (str): Voltage measurement range (e.g., "1V")
+)
+
+
+#add single frequency
+
+device.set_setup_single_frequency_point(
+    1000.0,  #frequency (float or str): Frequency point for single frequency measurement
+    1.0, #precision (float): Measurement precision
+    0.25, #amplitude (str or float): Signal amplitude
+    'voltage' #excitation_type (str): Type of excitation, "voltage" or "current"
+)
+#Wir können nur eine Einzelfrequenz oder eine Frequenzliste (min-max, n-steps, scale) in das setup laden 
+#z.B eine zweite Einzelfrequenz in das Setup hinzuzufügen ist nicht möglich
+#genauso werden mehrere Frequenzlisten genauso zusammengefasst
+"""
+#add frequency sweep
+device.set_setup_frequency_sweep(
+     100.0,             #start_frequency (float or str): Starting frequency
+     1000000.0,         #end_frequency (float or str): Ending frequency, e.g
+     100,             #count (int): Number of frequency points
+     "log",           #scale (str): Scale type, "log" or "linear"
+     1.0,             #precision (float): Measurement precision 
+     #precision testen -> bis 10.0
+     0.25,            #amplitude (str or float): Signal amplitude
+     'voltage'        #excitation_type (str): Type of excitation
+    )
+"""
+
+device.save_settings()
+
+device.get_setup()
+
+device.get_fe_settings()
+
+
+
+device.start_measurement(spectra=1)
+
 
 #device.write(command.get_options(0x04))     # defekt
 #result = read_answer(device)
 #print(result)
+
 
 """
 while True:
