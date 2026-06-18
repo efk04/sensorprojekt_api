@@ -31,6 +31,7 @@ class ISX3:
         self.ret_hex_int = None
         self.print_msg = True
         self.tcp_protocol = None
+        self.frequencies = []
 
     def is_port_available(self, port: str) -> bool:
         """
@@ -368,6 +369,10 @@ class ISX3:
         self.frequency_points = 1
 
         frequency_data = input_user.check_single_frequency_point(single_frequency_point)
+        
+        # HIER: Einzelfrequenz entpacken und speichern
+        single_f = struct.unpack(">f", bytes(frequency_data))[0]
+        self.frequencies = [single_f]
 
         settings_formatted = [0xB6, 0x0D, 0x02]
 
@@ -410,6 +415,19 @@ class ISX3:
 
         frequency_data = input_user.check_frequency_range(start_frequency, end_frequency)[0] + input_user.check_frequency_range(start_frequency, end_frequency)[1]
 
+        # HIER: Start- und Endfrequenz entpacken und Liste berechnen
+        import math
+        start_f = struct.unpack(">f", bytes(frequency_data[:4]))[0]
+        end_f = struct.unpack(">f", bytes(frequency_data[4:8]))[0]
+        
+        if count > 1:
+            if scale == "linear":
+                self.frequencies = [start_f + i * (end_f - start_f) / (count - 1) for i in range(count)]
+            else:  # "log"
+                self.frequencies = [start_f * ((end_f / start_f) ** (i / (count - 1))) for i in range(count)]
+        else:
+            self.frequencies = [start_f]
+
         settings_formatted = [0xB6, 0x16, 0x03]
 
         for data in frequency_data:
@@ -433,15 +451,6 @@ class ISX3:
         print("Set the setup. \n")
 
     def start_measurement(self, spectra: int = 20):
-        """
-                Starts a measurement process and writes results to a CSV file.
-
-                Args:
-                    spectra (int): Number of repetitions for each frequency point.
-
-                Returns:
-                    list of tuple: List containing measurement results as (Frequency ID, Real, Imaginary).
-                """
         if not self.device:
             print("Device not connected.")
             return []
@@ -462,10 +471,10 @@ class ISX3:
         print("Ergebnis:", results)
         self.system_message_callback_usb_fs()  # read ACK or NACK
 
-        # Write to CSV
+        # HIER: CSV-Spaltenkopf und Zeilen-Schreiben anpassen
         with open("measurement_results.csv", mode="w", newline='') as file:
             writer = csv.writer(file)
-            writer.writerow(["Frequency ID", "Real Part", "Imaginary Part"])
+            writer.writerow(["Frequency ID", "Frequency (Hz)", "Real Part", "Imaginary Part"])
             for row in results:
                 writer.writerow(row)
 
@@ -475,20 +484,6 @@ class ISX3:
         return results
 
     def read_measurement_data(self, expected_results, timeout):
-        """
-                Reads measurement data frames from the serial port.
-
-                Args:
-                    expected_results (int): Expected number of measurement results.
-
-                    timeout (float): The maximum time in seconds to wait for measurement data from the device.
-                    If the expected number of results is not received within this period, the method stops reading and
-                    returns the data collected up to that point. This prevents indefinite blocking in case of connection
-                    issues or incomplete data transmission
-
-                Returns:
-                    list of tuple: Parsed measurement data (Frequency ID, Real, Imaginary).
-                """
         start = time.time()
         results = []
         buffer = []
@@ -505,8 +500,23 @@ class ISX3:
                         freq_id = int.from_bytes(frame[2:4], "big")
                         real = struct.unpack(">f", bytes(frame[4:8]))[0]
                         imag = struct.unpack(">f", bytes(frame[8:12]))[0]
-                        results.append((freq_id, real, imag))
-                        buffer.clear()
+                        
+                        # HIER: Frequenzwert anhand der ID ermitteln (unterstützt 0- und 1-basierte IDs)
+                        freq_val = None
+                        if hasattr(self, "frequencies") and self.frequencies:
+                            # FALL A: Es ist ein Einzelfrequenz-Setup konfiguriert (points = 1)
+                            if self.frequency_points == 1:
+                                freq_val = self.frequencies[0]
+                            
+                            # FALL B: Es ist ein Sweep aktiv (points > 1)
+                            else:
+                                if freq_id < len(self.frequencies):
+                                    freq_val = self.frequencies[freq_id]
+                                elif (freq_id - 1) < len(self.frequencies):
+                                    freq_val = self.frequencies[freq_id - 1]
+                        
+                        # Frequenzwert mit in das Tupel aufnehmen
+                        results.append((freq_id, freq_val, real, imag))
         return results
 
     def software_reset(self):

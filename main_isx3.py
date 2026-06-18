@@ -119,29 +119,15 @@ device.set_setup_single_frequency_point(
 #Wir können nur eine Einzelfrequenz oder eine Frequenzliste (min-max, n-steps, scale) in das setup laden 
 #z.B eine zweite Einzelfrequenz in das Setup hinzuzufügen ist nicht möglich
 #genauso werden mehrere Frequenzlisten genauso zusammengefasst
-"""
-#add frequency sweep
-device.set_setup_frequency_sweep(
-     100.0,             #start_frequency (float or str): Starting frequency
-     1000000.0,         #end_frequency (float or str): Ending frequency, e.g
-     100,             #count (int): Number of frequency points
-     "log",           #scale (str): Scale type, "log" or "linear"
-     1.0,             #precision (float): Measurement precision 
-     #precision testen -> bis 10.0
-     0.25,            #amplitude (str or float): Signal amplitude
-     'voltage'        #excitation_type (str): Type of excitation
-    )
-"""
 
-device.save_settings()
+device.set_setup_single_frequency_point(
+    100.0,  #frequency (float or str): Frequency point for single frequency measurement
+    1.0, #precision (float): Measurement precision
+    0.25, #amplitude (str or float): Signal amplitude
+    'voltage' #excitation_type (str): Type of excitation, "voltage" or "current"
+)
 
-device.get_setup()
-
-device.get_fe_settings()
-
-
-
-device.start_measurement(spectra=1)
+device.start_measurement(spectra=10)
 
 
 #device.write(command.get_options(0x04))     # defekt
