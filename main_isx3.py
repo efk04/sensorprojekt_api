@@ -1,9 +1,36 @@
 ### IMPORTS ###
+from logging import config
 import time
 import serial
+import configparser
+import struct
 
 from TEST_ISX3 import ISX3
 import command_functions as command
+
+def create_config():
+    config = configparser.ConfigParser()
+    # Add sections and key-value pairs
+    config['Options'] = {
+        'time_stamp': 0,            # 0 = disabled, 1 = ms, 2 = us
+        'frequency_range': [0,10],  # [MinF, MaxF] in Hz
+        'current_range': 0          # 0 = disabled, 1 = ms
+    }
+    config['Frontend Settings'] = {
+    
+    }
+    config['ExtensionPort Channel Settings'] = {
+    
+    }
+    config['Ethernet Configuration'] = {
+    
+    }
+    config['Setup'] = {
+    
+    }
+    # Write the configuration to a file
+    with open('config.ini', 'w') as configfile:
+        config.write(configfile)
 
 
 device = 0
@@ -90,16 +117,48 @@ def print_frequency_menu():
     print("1 => Change minimum frequency")
     print("2 => Change maximum frequency")
 
+def freq_config_to_bytearray(freq_range: list[float]) -> bytearray:
+    if len(freq_range) != 2:
+        raise ValueError("Frequency range must contain exactly two values: [min, max]")
+
+    min_f, max_f = freq_range
+    packed_bytes = struct.pack('<ff', min_f, max_f)
+    print("Packed bytes: ", packed_bytes)
+    print(type(packed_bytes))
+    return bytearray(packed_bytes)
+
+def upload_config():
+    config = configparser.ConfigParser()
+    config.read('config.ini')
+
+    time_stamp = hex(int(config['Options']['time_stamp']))
+    frequency_range = freq_config_to_bytearray(eval(config['Options']['frequency_range']))
+    current_range = hex(int(config['Options']['current_range']))
+
+
+    print("Uploading configuration to device...")
+    print("OPTIONS:")
+    print("Time stamp: ", bytearray([int(time_stamp, 16)]))
+    print("Frequency range: ", frequency_range[0:4], " - ", frequency_range[4:8])
+    print("Current range: ", bytearray([int(current_range, 16)]))
 
 ### MAIN ###
+
+
 # Verbindungsaufbau
-device = ISX3()
+#device = ISX3()
 #device = serial.Serial(port="COM3", baudrate=115200, timeout=1)
-device.connect_device_fs("COM3")
+#device.connect_device_fs("COM3")
+
+upload_config()
+
+
+
+#device.close()
 
 
 #get_ethernet_config()
-
+'''
 device.set_fs_settings(
     4, #measurement_mode (int): Measurement mode (1=2-point, 2=4-point, 3=3-point)
    "bnc port" , #measurement_channel (str): Measurement channel to use (e.g., "Main Port")
@@ -144,4 +203,4 @@ while True:
 """
             
 #device.write_command_string(command.set_option(0x01, 0x01))
-#device.close()
+'''
