@@ -87,30 +87,44 @@ def download_config(device, configfile):
     current_range_settings = answer[4]
     voltage_range_settings = answer[5]
     
-
     # save values to config file
-    if time_stamp == '0x00':
-        configfile['Options']['ms_time_stamp'] = str(0)
-        configfile['Options']['us_time_stamp'] = str(0)
-    elif time_stamp == '0x01':
-        configfile['Options']['ms_time_stamp'] = str(1)
-        configfile['Options']['us_time_stamp'] = str(0)
-    elif time_stamp == '0x02':
-        configfile['Options']['ms_time_stamp'] = str(0)
-        configfile['Options']['us_time_stamp'] = str(1)
+    if time_stamp in ['0x00', '0x01', '0x02']:
+        configfile['Options']['ms_time_stamp'] = str(int(time_stamp, 16) & 0x01)
+        configfile['Options']['us_time_stamp'] = str((int(time_stamp, 16) >> 1) & 0x01)
     else:
         print("Warning: Invalid time_stamp value received from device. Setting both to 0.")
         configfile['Options']['ms_time_stamp'] = str(0)
         configfile['Options']['us_time_stamp'] = str(0)
     
-    if current_range == '0x00':
-        configfile['Options']['current_range'] = str(0)
-    elif current_range == '0x01':
-        configfile['Options']['current_range'] = str(1)
+    if current_range in ['0x00', '0x01']:
+        configfile['Options']['current_range'] = str(int(current_range, 16))
     else:
         print("Warning: Invalid current_range value received from device. Setting to 0.")
+        configfile['Options']['current_range'] = str(0)
 
-    if 
+    if measurement_mode in ['0x01', '0x02', '0x03']:
+        configfile['Frontend Settings']['measurement_mode'] = str(int(measurement_mode, 16))
+    else:
+        print("Warning: Invalid measurement_mode value received from device. Setting to 1.")
+        configfile['Frontend Settings']['measurement_mode'] = str(1)
+    
+    if measurement_channel in ['0x01', '0x02', '0x03']:
+        configfile['Frontend Settings']['measurement_channel'] = str(int(measurement_channel, 16))
+    else:
+        print("Warning: Invalid measurement_channel value received from device. Setting to 1.")
+        configfile['Frontend Settings']['measurement_channel'] = str(1)
+    
+    if current_range_settings in ['0x00', '0x01', '0x02', '0x04', '0x06']:
+        configfile['Frontend Settings']['current_range_settings'] = str(int(current_range_settings, 16))
+    else:
+        print("Warning: Invalid current_range_settings value received from device. Setting to 0.")
+        configfile['Frontend Settings']['current_range_settings'] = str(0)
+    
+    if voltage_range_settings in ['0x00', '0x01', '0x02']:
+        configfile['Frontend Settings']['voltage_range_settings'] = str(int(voltage_range_settings, 16))
+    else:
+        print("Warning: Invalid voltage_range_settings value received from device. Setting to 0.")
+        configfile['Frontend Settings']['voltage_range_settings'] = str(0)
 
     with open('config.ini', 'w') as configfile:
         config.write(configfile)

@@ -9,25 +9,6 @@ from TEST_ISX3 import ISX3
 import command_functions as command
 
 ### FUNCTIONS ###
-def read_answer(dev):
-    timeout_count = 0
-    received = []
-    data_count = 0
-
-    while True:
-        buffer = dev.read()
-        if buffer:
-            received.extend(buffer)
-            data_count += len(buffer)
-            timeout_count = 0
-            continue
-        timeout_count += 1
-        if timeout_count >= 1:
-            # Break if we haven't received any data
-            break
-    received_hex = [hex(receive) for receive in received]        
-    return received_hex
-    #return bytearray(int(h, 16) for h in received_hex)
 
 def convert_timestamp_option(option):
     match option:
