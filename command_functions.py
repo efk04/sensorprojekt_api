@@ -15,7 +15,7 @@ Description: Implemantierung der Commands zur Ansteuerung des ISX3-Gerät.
 def save_settings():
     return bytearray([0x90, 0x00, 0x90])
 
-def set_option(ob,cd):
+def set_option(ob:int, cd:int):
     length = 0x02
     return bytearray([0x97, length, ob, cd, 0x97])
 

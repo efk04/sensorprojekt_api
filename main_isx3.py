@@ -89,67 +89,40 @@ def get_full_options():
     print(read_answer())
     return result
 
-def main_menu():
-    print("Mainmenu:")
-    print("1 => Options")
-    print("2 => Measuring")
-    userinput = input("Please select an option: ")
-    return userinput
-
-def options_menu():
-    options = get_full_options()
-    print("Options:")
-    print("1 => Time stamp: ", options[0])
-    print("2 => Frequency range: ", options[1:5], "Hz - ", options[5:9], "Hz")
-    print("3 => Current range: ", options[1:5], "Hz - ", options[5:9], "Hz")
-
-    userinput = input("Please select an option: ")
-    return userinput
-
-def print_timestamp_menu():
-    print("Time stamp options:")
-    print("0 => disabled")
-    print("1 => ms")
-    print("2 => us")
-
-def print_frequency_menu():
-    print("Frequency range options:")
-    print("1 => Change minimum frequency")
-    print("2 => Change maximum frequency")
-
-def config_to_bytearray(config_value: list[float]) -> bytearray:
-    if len(config_value) == 1:
-        value = config_value[0]
-        packed_bytes = struct.pack('<f', value)
-        return bytearray(packed_bytes)
-    if len(config_value) == 2:
-        min_f, max_f = config_value
-        packed_bytes = struct.pack('<ff', min_f, max_f)
-        return bytearray(packed_bytes)
+def load_value_from_config(section: str, key: str, default: list[int]) -> int:
+    
+    # check if config is initialized
+    if configfile is None:
+        raise ValueError("Config object is not initialized. Please load the config file first.")
+    
+    # check if section and key exist in the config and load value
+    if section in configfile and key in configfile[section]:
+        value = int(configfile[section][key])
+    
+    # check if the loaded value is in the default list
+    if value not in default:
+        raise ValueError(f"Invalid value for {key}. Must be one of {default}.")
     else:
-        raise ValueError("Config value must contain either one or two floating-point values")
+        return value
+        
+
 
 def upload_config():
     # load config file
-    config = configparser.ConfigParser()
-    config.read('config.ini')
+    configfile.read('config.ini')
 
     # load values from config file
-    time_stamp = config_to_bytearray(eval(config['Options']['time_stamp']))
-    frequency_range = config_to_bytearray(eval(config['Options']['frequency_range']))
-    current_range = config_to_bytearray(eval(config['Options']['current_range']))
+    ms_time_stamp = load_value_from_config('Options', 'ms_time_stamp', [0, 1])
+    us_time_stamp = load_value_from_config('Options', 'us_time_stamp', [0, 1])
+    current_range = load_value_from_config('Options', 'current_range', [0, 1])
 
-    """
-    print("Uploading configuration to device...")
-    print("OPTIONS:")
-    print("Time stamp: ", bytearray([int(time_stamp, 16)]))
-    print("Frequency range: ", frequency_range[0:4], " ", frequency_range[4:8])
-    print("Current range: ", bytearray([int(current_range, 16)]))
-    """
+    print(ms_time_stamp, us_time_stamp, current_range)
+   
+    
     # Upload
-    device.write(command.set_option(0x01, int(time_stamp, 16)))
-    device.write(command.set_option(0x03, frequency_range))
-    device.write(command.set_option(0x04, int(current_range, 16)))
+    device.write(command.set_option(0x01, ms_time_stamp))
+    device.write(command.set_option(0x02, us_time_stamp))
+    device.write(command.set_option(0x04, current_range))
 
 
 
@@ -160,57 +133,16 @@ def upload_config():
 device = ISX3()
 device = serial.Serial(port="COM3", baudrate=115200, timeout=1)
 
+"""
+configfile = configparser.ConfigParser()
 upload_config()
+device.write(command.get_options(0x04))
+result = 0
+result = read_answer(device)
+print("Time stamp option:", result)
+"""
+
 
 
 
 #device.close()
-
-
-#get_ethernet_config()
-'''
-device.set_fs_settings(
-    4, #measurement_mode (int): Measurement mode (1=2-point, 2=4-point, 3=3-point)
-   "bnc port" , #measurement_channel (str): Measurement channel to use (e.g., "Main Port")
-   'autoranging' , #current_measurement_range (str): Current measurement range (e.g., "10mA")
-   '1V' , #voltage_measurement_range (str): Voltage measurement range (e.g., "1V")
-)
-
-
-#add single frequency
-
-device.set_setup_single_frequency_point(
-    1000.0,  #frequency (float or str): Frequency point for single frequency measurement
-    1.0, #precision (float): Measurement precision
-    0.25, #amplitude (str or float): Signal amplitude
-    'voltage' #excitation_type (str): Type of excitation, "voltage" or "current"
-)
-#Wir können nur eine Einzelfrequenz oder eine Frequenzliste (min-max, n-steps, scale) in das setup laden 
-#z.B eine zweite Einzelfrequenz in das Setup hinzuzufügen ist nicht möglich
-#genauso werden mehrere Frequenzlisten genauso zusammengefasst
-
-device.set_setup_single_frequency_point(
-    100.0,  #frequency (float or str): Frequency point for single frequency measurement
-    1.0, #precision (float): Measurement precision
-    0.25, #amplitude (str or float): Signal amplitude
-    'voltage' #excitation_type (str): Type of excitation, "voltage" or "current"
-)
-
-device.start_measurement(spectra=10)
-
-
-#device.write(command.get_options(0x04))     # defekt
-#result = read_answer(device)
-#print(result)
-
-
-"""
-while True:
-    userinput = main_menu()
-    match userinput:
-        case "1":
-            userinput = options_menu()
-"""
-            
-#device.write_command_string(command.set_option(0x01, 0x01))
-'''

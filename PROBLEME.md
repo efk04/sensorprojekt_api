@@ -1,0 +1,5 @@
+# 09/07/26 - Get Options, current range
+input:  0x98, 0x01, 0x04, 0x98
+output: ['0x18', '0x1', '0x82', '0x18']
+0x82 - Not-Acknowledge: Command could not be recognized
+
