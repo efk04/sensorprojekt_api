@@ -69,6 +69,7 @@ def upload_config(device, configfile):
     device.write(set_fe_settings(measurement_mode, measurement_channel, current_range_settings, voltage_range_settings))
 
 def download_config(device, configfile):
+    configfile.read('config.ini')
 
     # Download
     device.write(get_options(0x01))
@@ -82,6 +83,12 @@ def download_config(device, configfile):
 
     device.write(get_fe_settings())
     answer = read_answer(device)
+    if answer[2] == '0x82':
+        print("Warning: Invalid option code for frontend settings.")
+        answer[2] = '0x01'  # Set a default value
+        answer[3] = '0x01'  # Set a default value
+        answer.append('0x00')  # Set a default value
+        answer.append('0x00')  # Set a default value
     measurement_mode = answer[2]
     measurement_channel = answer[3]
     current_range_settings = answer[4]
@@ -125,9 +132,6 @@ def download_config(device, configfile):
     else:
         print("Warning: Invalid voltage_range_settings value received from device. Setting to 0.")
         configfile['Frontend Settings']['voltage_range_settings'] = str(0)
-
-    with open('config.ini', 'w') as configfile:
-        config.write(configfile)
 
 ### DEVICE COMMANDS ###
 def set_fe_settings(measurement_mode, measurement_channel, current_range_settings, voltage_range_settings = None):
