@@ -8,32 +8,6 @@ import struct
 from TEST_ISX3 import ISX3
 import command_functions as command
 
-def create_config():
-    config = configparser.ConfigParser()
-    # Add sections and key-value pairs
-    config['Options'] = {
-        'time_stamp': 0,            # 0 = disabled, 1 = ms, 2 = us
-        'frequency_range': [0,10],  # [MinF, MaxF] in Hz
-        'current_range': 0          # 0 = disabled, 1 = ms
-    }
-    config['Frontend Settings'] = {
-    
-    }
-    config['ExtensionPort Channel Settings'] = {
-    
-    }
-    config['Ethernet Configuration'] = {
-    
-    }
-    config['Setup'] = {
-    
-    }
-    # Write the configuration to a file
-    with open('config.ini', 'w') as configfile:
-        config.write(configfile)
-
-
-device = 0
 ### FUNCTIONS ###
 def read_answer(dev):
     timeout_count = 0
@@ -89,60 +63,17 @@ def get_full_options():
     print(read_answer())
     return result
 
-def load_value_from_config(section: str, key: str, default: list[int]) -> int:
-    
-    # check if config is initialized
-    if configfile is None:
-        raise ValueError("Config object is not initialized. Please load the config file first.")
-    
-    # check if section and key exist in the config and load value
-    if section in configfile and key in configfile[section]:
-        value = int(configfile[section][key])
-    
-    # check if the loaded value is in the default list
-    if value not in default:
-        raise ValueError(f"Invalid value for {key}. Must be one of {default}.")
-    else:
-        return value
-        
-
-
-def upload_config():
-    # load config file
-    configfile.read('config.ini')
-
-    # load values from config file
-    ms_time_stamp = load_value_from_config('Options', 'ms_time_stamp', [0, 1])
-    us_time_stamp = load_value_from_config('Options', 'us_time_stamp', [0, 1])
-    current_range = load_value_from_config('Options', 'current_range', [0, 1])
-
-    print(ms_time_stamp, us_time_stamp, current_range)
-   
-    
-    # Upload
-    device.write(command.set_option(0x01, ms_time_stamp))
-    device.write(command.set_option(0x02, us_time_stamp))
-    device.write(command.set_option(0x04, current_range))
-
 
 
 ### MAIN ###
-
-
 # Verbindungsaufbau
 device = ISX3()
 device = serial.Serial(port="COM3", baudrate=115200, timeout=1)
 
-"""
+# load config and upload to device
 configfile = configparser.ConfigParser()
-upload_config()
-device.write(command.get_options(0x04))
-result = 0
-result = read_answer(device)
-print("Time stamp option:", result)
-"""
+command.upload_config(device, configfile)
 
 
 
-
-#device.close()
+device.close()

@@ -61,7 +61,41 @@ def set_setup(length, ob, cd):
             return bytearray([COMMAND_CODE, length, 0x05, cd, COMMAND_CODE])
     """
 
-
-
 def start_measure():
     return bytearray([0xB8, 0x02, 0x01, 0x00, 0xB8])
+
+
+
+### CONFIGURATION ###
+def load_value_from_config(configfile, section: str, key: str, default: list[int]) -> int:
+    
+    # check if config is initialized
+    if configfile is None:
+        raise ValueError("Config object is not initialized. Please load the config file first.")
+    
+    # check if section and key exist in the config and load value
+    if section in configfile and key in configfile[section]:
+        value = int(configfile[section][key])
+    
+    # check if the loaded value is in the default list
+    if value not in default:
+        raise ValueError(f"Invalid value for {key}. Must be one of {default}.")
+    else:
+        return value
+
+def upload_config(device, configfile):
+    # load config file
+    configfile.read('config.ini')
+
+    # load values from config file
+    ms_time_stamp = load_value_from_config(configfile, 'Options', 'ms_time_stamp', [0, 1])
+    us_time_stamp = load_value_from_config(configfile, 'Options', 'us_time_stamp', [0, 1])
+    current_range = load_value_from_config(configfile, 'Options', 'current_range', [0, 1])
+
+    print(ms_time_stamp, us_time_stamp, current_range)
+   
+    
+    # Upload
+    device.write(set_option(0x01, ms_time_stamp))
+    device.write(set_option(0x02, us_time_stamp))
+    device.write(set_option(0x04, current_range))
