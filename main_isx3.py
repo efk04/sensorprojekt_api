@@ -117,38 +117,48 @@ def print_frequency_menu():
     print("1 => Change minimum frequency")
     print("2 => Change maximum frequency")
 
-def freq_config_to_bytearray(freq_range: list[float]) -> bytearray:
-    if len(freq_range) != 2:
-        raise ValueError("Frequency range must contain exactly two values: [min, max]")
-
-    min_f, max_f = freq_range
-    packed_bytes = struct.pack('<ff', min_f, max_f)
-    print("Packed bytes: ", packed_bytes)
-    print(type(packed_bytes))
-    return bytearray(packed_bytes)
+def config_to_bytearray(config_value: list[float]) -> bytearray:
+    if len(config_value) == 1:
+        value = config_value[0]
+        packed_bytes = struct.pack('<f', value)
+        return bytearray(packed_bytes)
+    if len(config_value) == 2:
+        min_f, max_f = config_value
+        packed_bytes = struct.pack('<ff', min_f, max_f)
+        return bytearray(packed_bytes)
+    else:
+        raise ValueError("Config value must contain either one or two floating-point values")
 
 def upload_config():
+    # load config file
     config = configparser.ConfigParser()
     config.read('config.ini')
 
-    time_stamp = hex(int(config['Options']['time_stamp']))
-    frequency_range = freq_config_to_bytearray(eval(config['Options']['frequency_range']))
-    current_range = hex(int(config['Options']['current_range']))
+    # load values from config file
+    time_stamp = config_to_bytearray(eval(config['Options']['time_stamp']))
+    frequency_range = config_to_bytearray(eval(config['Options']['frequency_range']))
+    current_range = config_to_bytearray(eval(config['Options']['current_range']))
 
-
+    """
     print("Uploading configuration to device...")
     print("OPTIONS:")
     print("Time stamp: ", bytearray([int(time_stamp, 16)]))
-    print("Frequency range: ", frequency_range[0:4], " - ", frequency_range[4:8])
+    print("Frequency range: ", frequency_range[0:4], " ", frequency_range[4:8])
     print("Current range: ", bytearray([int(current_range, 16)]))
+    """
+    # Upload
+    device.write(command.set_option(0x01, int(time_stamp, 16)))
+    device.write(command.set_option(0x03, frequency_range))
+    device.write(command.set_option(0x04, int(current_range, 16)))
+
+
 
 ### MAIN ###
 
 
 # Verbindungsaufbau
-#device = ISX3()
-#device = serial.Serial(port="COM3", baudrate=115200, timeout=1)
-#device.connect_device_fs("COM3")
+device = ISX3()
+device = serial.Serial(port="COM3", baudrate=115200, timeout=1)
 
 upload_config()
 
