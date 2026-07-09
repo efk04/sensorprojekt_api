@@ -56,13 +56,17 @@ def upload_config(device, configfile):
     us_time_stamp = load_value_from_config(configfile, 'Options', 'us_time_stamp', [0, 1])
     current_range = load_value_from_config(configfile, 'Options', 'current_range', [0, 1])
 
-    print(ms_time_stamp, us_time_stamp, current_range)
+    measurement_mode        = load_value_from_config(configfile, 'Frontend Settings', 'measurement_mode', [1, 2, 3])
+    measurement_channel     = load_value_from_config(configfile, 'Frontend Settings', 'measurement_channel', [1, 2, 3])
+    current_range_settings  = load_value_from_config(configfile, 'Frontend Settings', 'current_range_settings', [0, 1, 2, 4, 6])
+    voltage_range_settings  = load_value_from_config(configfile, 'Frontend Settings', 'voltage_range_settings', [0, 1, 2])
    
-    
     # Upload
     device.write(set_option(0x01, ms_time_stamp))
     device.write(set_option(0x02, us_time_stamp))
     device.write(set_option(0x04, current_range))
+
+    device.write(set_fe_settings(measurement_mode, measurement_channel, current_range_settings, voltage_range_settings))
 
 def download_config(device, configfile):
 
@@ -75,6 +79,14 @@ def download_config(device, configfile):
         print("Warning: Invalid option code for current_range.")
         answer[3] = '0x00'  # Set a default value
     current_range = answer[3]
+
+    device.write(get_fe_settings())
+    answer = read_answer(device)
+    measurement_mode = answer[2]
+    measurement_channel = answer[3]
+    current_range_settings = answer[4]
+    voltage_range_settings = answer[5]
+    
 
     # save values to config file
     if time_stamp == '0x00':
@@ -98,10 +110,21 @@ def download_config(device, configfile):
     else:
         print("Warning: Invalid current_range value received from device. Setting to 0.")
 
+    if 
+
     with open('config.ini', 'w') as configfile:
         config.write(configfile)
 
+### DEVICE COMMANDS ###
+def set_fe_settings(measurement_mode, measurement_channel, current_range_settings, voltage_range_settings = None):
+    length = 0x03
+    if voltage_range_settings is not None:
+        length = 0x04
+        return bytearray([0xB0, length, measurement_mode, measurement_channel, current_range_settings, voltage_range_settings, 0xB0])
+    return bytearray([0xB0, length, measurement_mode, measurement_channel, current_range_settings, 0xB0])
 
+def get_fe_settings():
+    return bytearray([0xB1, 0x00, 0xB1])
 
 ### SONSTIGE ###
 def save_settings():
@@ -117,13 +140,6 @@ def get_options(ob):
 
 def reset_system():
     return bytearray([0xA1, 0x00, 0xA1])
-
-def  set_fe_settings(measurement_mode, measurement_channel, current_range_settings, voltage_range_settings = None):
-    length = 0x03
-    if voltage_range_settings is not None:
-        length = 0x04
-        return bytearray([0xB0, length, measurement_mode, measurement_channel, current_range_settings, voltage_range_settings, 0xB0])
-    return bytearray([0xB0, length, measurement_mode, measurement_channel, current_range_settings, 0xB0])
 
 def get_fe_settings():
     return bytearray([0xB1, 0x00, 0xB1])
