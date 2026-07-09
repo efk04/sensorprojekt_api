@@ -136,18 +136,37 @@ class H5LiveEvaluator:
         if not data_to_plot:
             return
 
+        # Listen vorbereiten, um alle Einzelpunkte zu sammeln
+        all_freqs = []
+        all_reals = []
+        all_imags = []
+
         for group_name, values in data_to_plot.items():
-            freq = values['frequency']
-            real = values['real']
-            imag = values['imaginary']
-            complex_part = np.sqrt(real**2 + imag**2)
-            
-            # Diagramm 1: Real- und Imaginärteil
-            self.ax1.plot(freq, real, 'o', linewidth=1.5, label=f"{group_name} (Real)")
-            self.ax1.plot(freq, imag, 's', linewidth=1.5, label=f"{group_name} (Imag)")
-            
-            # Diagramm 2: Betrag
-            self.ax2.plot(freq, complex_part, 'd', linewidth=1.5, label=f"{group_name} (Betrag)")
+            all_freqs = values['frequency']
+            all_reals = values['real']
+            all_imags = values['imaginary']
+
+        # In NumPy-Arrays umwandeln
+        all_freqs = np.array(all_freqs)
+        all_reals = np.array(all_reals)
+        all_imags = np.array(all_imags)
+
+        # 2. WICHTIG: Nach Frequenz sortieren, damit die Verbindungslinien Sinn ergeben!
+        sort_indices = np.argsort(all_freqs)
+        all_freqs = all_freqs[sort_indices]
+        all_reals = all_reals[sort_indices]
+        all_imags = all_imags[sort_indices]
+
+        complex_part = np.sqrt(all_reals**2 + all_imags**2)
+
+
+        
+        # Diagramm 1: Real- und Imaginärteil
+        self.ax1.plot(all_freqs, all_reals, 'o', linewidth=1.5, label=f"{group_name} (Real)")
+        self.ax1.plot(all_freqs, all_imags, 's', linewidth=1.5, label=f"{group_name} (Imag)")
+        
+        # Diagramm 2: Betrag
+        self.ax2.plot(all_freqs, complex_part, 'd', linewidth=1.5, label=f"{group_name} (Betrag)")
 
         # Styling Ax1
         self.ax1.set_ylabel("Widerstand [Ω]")
@@ -165,6 +184,10 @@ class H5LiveEvaluator:
         plt.tight_layout()
         plt.draw()
         plt.pause(0.01)
+
+    def show_plot(self):
+        plt.ioff()
+        plt.show()
 
     def freeze_window(self):
         """Hält das Fenster am Ende dauerhaft offen."""
