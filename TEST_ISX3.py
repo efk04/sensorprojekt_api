@@ -2,12 +2,15 @@ import struct
 import serial
 import serial.tools.list_ports
 import csv
-
+import h5py
+import numpy as np
 from shapely import buffer
 import test_check_User_Input as input_user
 import time
 import socket
 
+from datetime import datetime
+from typing import Iterable, List, Tuple
 MSG_DICT = {
     "0x01": "No message inside the message buffer",
     "0x02": "Timeout: Communication-timeout (less data than expected)",
@@ -152,7 +155,7 @@ class ISX3:
         timeout_count = 0
         received = []
         data_count = 0
-
+        
         while True:
             buffer = self.device.read()
             if buffer:
@@ -450,10 +453,12 @@ class ISX3:
 
         print("Set the setup. \n")
 
-    def start_measurement(self, spectra: int = 20):
+    def start_measurement(self, spectra: int = 20, h5_filename =str ):
         if not self.device:
             print("Device not connected.")
             return []
+
+        h5_filename = h5_filename 
 
         spectra = input_user.check_input_spectra(spectra)
         expected_results = spectra * self.frequency_points
@@ -477,11 +482,52 @@ class ISX3:
             writer.writerow(["Frequency ID", "Frequency (Hz)", "Real Part", "Imaginary Part"])
             for row in results:
                 writer.writerow(row)
+        
+        #Write to HDF5
+        self.write_hdf5(results, h5_filename=h5_filename)
 
         print(f"{len(results)} Measurement Results were written into measurement_results.csv.")
 
         time.sleep(6)
         return results
+
+
+
+    
+    def write_hdf5(self, results: list, h5_filename = str):
+        """
+        create a hdf5 file, 
+        save the measurment results in a hdf5 group (1 Gruppe pro Messvorgang)
+
+        #check if contnius measurment is possible -> oder ob für jeden Messvorgang neue datein erstellt werden
+        #get the actual frequency to replace frequency id
+        """
+
+        filename = h5_filename
+        
+        results = list(results)
+
+        if  not results:
+            raise ValueError("Die Ergebnisliste ist leer.")
+        
+        # 2. Eindeutigen Gruppennamen erstellen (z. B. mit genauer Uhrzeit)
+        current_time = datetime.now().strftime("%H%M%S")
+        group_name = f"Messung_{current_time}"
+
+        with h5py.File(filename, 'a') as f:
+
+            group = f.create_group(group_name)
+
+            group.create_dataset("frequency_id", data=[r[0]for r in results])
+            group.create_dataset("real_part", data=[r[1] for r in results])
+            group.create_dataset("imaginary_part", data=[r[2] for r in results])
+
+            group.attrs["created"] = datetime.now().isoformat()
+            print(
+                f"Messung erfolgreich in Gruppe '{group_name}' "
+                f"der Datei '{filename}' gespeichert."
+            )
+        return f
 
     def read_measurement_data(self, expected_results, timeout):
         start = time.time()

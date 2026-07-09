@@ -1,3 +1,4 @@
 measurement_results.csv
 __pycache__/
-my_test_main.py
+isx3.venv/
+*.h5
