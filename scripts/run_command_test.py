@@ -1,9 +1,9 @@
 import time
 import serial
 
-from TEST_ISX3 import ISX3
+from src.TEST_ISX3 import ISX3
 import command_functions as command
-from main_isx3 import read_answer
+from main import read_answer
 
 device = serial.Serial(port="COM3", baudrate=115200, timeout=1)
 

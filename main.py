@@ -5,7 +5,7 @@ import serial
 import configparser
 import struct
 
-from TEST_ISX3 import ISX3
+from src.TEST_ISX3 import ISX3
 import command_functions as command
 
 ### FUNCTIONS ###

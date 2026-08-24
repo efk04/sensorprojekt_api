@@ -3,6 +3,5 @@ __pycache__/
 isx3.venv/
 *.h5
 *.png
-my_test_main.py
-Test_plt-ion.py
-Main_kontinuierlich_Messen.py
+measurements/
+
