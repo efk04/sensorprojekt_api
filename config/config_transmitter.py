@@ -158,3 +158,12 @@ class ISX3Transmitter:
         self._send_command(0xB9, sync_payload) #[cite: 2]
 
         print("Konfiguration erfolgreich auf das ISX-3 übertragen!")
+
+
+    def start_measurement(self, number_of_spectra: int = 1):
+        """
+        Startet die Messung anhand der zuvor gesendeten Konfiguration (Befehl 0xB8).[cite: 2]
+        """
+        print(f"Starte Messung für {number_of_spectra} Spektren...")
+        payload = bytes([0x01]) + struct.pack('>H', number_of_spectra) # uint16[cite: 2]
+        self._send_command(0xB8, payload) # [cite: 2]

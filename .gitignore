@@ -4,5 +4,5 @@ isx3.venv/
 *.h5
 *.png
 measurements/
-test.py
+test_config.py
 
