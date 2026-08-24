@@ -9,7 +9,7 @@ from datetime import datetime
 import time
 from TEST_ISX3 import ISX3
 import command_functions as command
-from Auswertung_Messung import H5LiveEvaluator
+from zz_sonstige.Auswertung_Messung import H5LiveEvaluator
 
 
 

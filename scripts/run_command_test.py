@@ -1,45 +1,29 @@
-import time
 import serial
+from config.config_transmitter import ISX3Transmitter
+from config.config_handler import ISX3ConfigParser
 
-from src.TEST_ISX3 import ISX3
-import command_functions as command
-from main import read_answer
+parser = ISX3ConfigParser('config.ini')
+config = parser.parse()
 
-device = serial.Serial(port="COM3", baudrate=115200, timeout=1)
+com_port = config.connection.port
+baud = config.connection.baudrate
 
-print("Testing get_options(timestamp) command:")
-com = command.get_options(0x01)
-device.write(com)
-result = read_answer(device)
-print("Input: ", [hex(b) for b in com])
-print("Output: ", result)
-
-print("Testing get_options(frequency range) command:")
-com = command.get_options(0x03)
-device.write(com)
-result = read_answer(device)
-print("Input: ", [hex(b) for b in com])
-print("Output: ", result)
-
-print("Testing get_options(current range) command:")
-com = command.get_options(0x04)
-device.write(com)
-result = read_answer(device)
-print("Input: ", [hex(b) for b in com])
-print("Output: ", result)
-
-print("Testing set_fe_settings command:")
-com = command.set_fe_settings(0x01, 0x01, 0x00)
-device.write(com)
-result = read_answer(device)
-print("Input: ", [hex(b) for b in com])
-print("Output: ", result)
-
-print("Testing get_fe_settings command:")
-com = command.get_fe_settings()
-device.write(com)
-result = read_answer(device)
-print("Input: ", [hex(b) for b in com])
-print("Output: ", result)
-
-device.close()
+print(f"Verbinde zu {com_port} mit {baud} Baud...")
+    
+try:
+    # Pyserial Instanz öffnen (Timeout ist wichtig für das Lesen der ACKs!)
+    with serial.Serial(port=com_port, baudrate=baud, timeout=2.0) as ser:
+            
+        # Transmitter initialisieren
+        transmitter = ISX3Transmitter(ser)
+            
+        # Kompletten Parametersatz übertragen
+        transmitter.apply_config(config)
+            
+        # Messung starten (Nutzt den Wert "number_of_spectra" aus der Config)
+        # transmitter.start_measurement(config.measurement.number_of_spectra)
+            
+except serial.SerialException as e:
+    print(f"Serieller Fehler: Konnte Port {com_port} nicht öffnen. ({e})")
+except Exception as e:
+    print(f"Fehler bei der Kommunikation: {e}")
