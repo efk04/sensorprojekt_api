@@ -5,6 +5,7 @@ import time
 import serial
 import configparser
 import struct
+import pprint
 
 from src.TEST_ISX3 import ISX3
 import src.command_functions as command
@@ -12,8 +13,7 @@ import src.command_functions as command
 from src.helper_functions import *
 
 import config.config_transmitter as config_transmitter
-import config.config_handler as config_handler
-
+from config.config_handler import ISX3ConfigParser
 ### FUNCTIONS ###
 
 def convert_timestamp_option(option):
@@ -80,20 +80,19 @@ def connect_to_device():
 
 
 ### MAIN ###
-cfg, ser, transmitter = connect_to_device()
-
-# Prüfen, ob die Verbindung erfolgreich war
-if cfg and ser and transmitter:
+def main():
+    # 1. Initialize the parser with the path to your config file
+    parser = ISX3ConfigParser("config/config.ini")
+    
     try:
-        transmitter.apply_config(cfg) # config übertragen
-        for i in range(1):
-            transmitter.start_measurement(cfg.measurement.number_of_spectra)
-            data = command.read_answer(ser)
-            print("Rohdaten: ", data)
-            data = stringarray_to_intarray(data)
-            print(data)
+        # 2. Get the configuration as a nested dictionary
+        config_dict = parser.parse_as_flat_dict()
+        
+        print("\n--- Full Dictionary Structure ---")
+        print(config_dict)
+        
+    except FileNotFoundError as e:
+        print(e)
 
-    finally:
-        # Sicherstellen, dass der Port am Ende wieder geschlossen wird
-        print("Schließe Verbindung...")
-        ser.close()
+if __name__ == "__main__":
+    main()

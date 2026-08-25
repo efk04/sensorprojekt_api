@@ -1,5 +1,5 @@
 import configparser
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 # ==============================================================================
 # Datenstrukturen für die verschiedenen Konfigurations-Bereiche
@@ -174,3 +174,25 @@ class ISX3ConfigParser:
         return MeasurementConfig(
             number_of_spectra=self.parser.getint(sec, 'number_of_spectra', fallback=1)
         )
+
+    def parse_as_dict(self) -> dict:
+        """Parses the config and returns a nested dictionary of all values."""
+        config_object = self.parse()
+        return asdict(config_object)
+
+    def parse_as_flat_dict(self, use_prefix: bool = False) -> dict:
+        """
+        Parses the config and returns a single-level (flattened) dictionary.
+        :param use_prefix: If True, keys become 'section_key' (e.g., 'connection_baudrate').
+                           If False, keys are left as-is (e.g., 'baudrate').
+        """
+        nested_dict = self.parse_as_dict()
+        flat_dict = {}
+        
+        for section, values in nested_dict.items():
+            if isinstance(values, dict):
+                for key, val in values.items():
+                    flat_key = f"{section}_{key}" if use_prefix else key
+                    flat_dict[flat_key] = val
+                    
+        return flat_dict
