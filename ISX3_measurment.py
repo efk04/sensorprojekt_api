@@ -10,8 +10,8 @@ import pandas as pd
 import json
 
 #import Classes
-from TEST_ISX3 import ISX3
-import test_check_User_Input as check_user_input
+from src.TEST_ISX3 import ISX3
+import src.test_check_User_Input as check_user_input
 
 
 class user_input:
@@ -162,18 +162,19 @@ class Measurement:
         pass
 
 
-    def load_measurement_setup(self, raw):
+    def load_measurement_setup(self, settings):
         #load measurement setup for one frequency setup from self.measurement_setup_queue in device 
         #1. load the fs_settings from measurement_setup_queue
 
         self.device.set_fs_settings(
-            measurement_mode=raw["measurement_mode"],
-            measurement_channel=raw["measurement_channel"],
-            current_measurement_range=raw["current_measurement_range"],
-            voltage_measurement_range=raw["voltage_measurement_range"],
+            measurement_mode=settings["measurement_mode"],
+            measurement_channel=settings["measurement_channel"],
+            current_measurement_range=settings["current_measurement_range"],
+            voltage_measurement_range=settings["voltage_measurement_range"],
         )
 
     def load_freq_setup(self, current_setup):
+                
         #2. load the frequency from measurement_setup_queue
         self.device.set_setup_single_frequency_point(
             frequency = current_setup["frequency"],  #frequency (float or str): Frequency point for single frequency measurement
@@ -188,14 +189,14 @@ class Measurement:
         results = []
         results = self.device.start_measurement(spectra = current_setup["spectra"], id = current_setup["id"]) #spectra counts the measurement repetitions
         return results
-    def safe_measurement_settings(self):
+    
+    def safe_measurement_settings(self,settings):
         #saves the general sttings for the measurement before the measurement
 
         group_name = "1-Measurement_Settings"
 
         #gets measurements_settings dictionary from user and writes it as a string as a json file (in welcher form sollen die einstellungen gespeichert werden?)
-        measurement_settings = input.get_all_measurement_settings_from_user()
-        measurement_settings_json = json.dumps(measurement_settings)
+        measurement_settings_json = json.dumps(settings)
         
         with h5py.File(self.filename,'a') as f:
             group = f.create_group(group_name)
@@ -274,9 +275,12 @@ class Measurement:
         #connects device via USB
         self.device.connect_device_fs("COM3") 
 
+        #saves the measurement settings as a group in the h5-file
+        self.measurements_settings = self.input.get_all_measurement_settings_from_user()
+        self.safe_measurement_settings(settings = self.measurements_settings)
+        
         #load measurment settings
-        raw_setup = self.input.get_all_measurement_settings_from_user()
-        self.load_measurement_setup(raw = raw_setup )
+        self.load_measurement_setup(settings = self.measurements_settings)
 
         #creats a queue of all measurement setups to be executed in the measurement loop
         measurement_setup_queue = self.input.generate_measurement_queue()
@@ -289,9 +293,9 @@ class Measurement:
             print(f'\n----- Starts Measurement with ID: {current_setup["id"]} ---') #id, bzw anderen Zähler hinzufügen, um überblick über ausgeführte Messungen zu behalten
 
             #load frequnecy setup in device
-            self.load_freq_setup(self, current_setup=current_setup)
+            self.load_freq_setup(current_setup=current_setup)
+
             #start measurment and collect data
-            
             results = self.start_measurement(current_setup = current_setup)
             print(results)
      
