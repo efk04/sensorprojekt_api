@@ -8,6 +8,7 @@ from shapely import buffer
 import test_check_User_Input as input_user
 import time
 import socket
+import numpy as np
 
 from datetime import datetime
 from typing import Iterable, List, Tuple
@@ -23,6 +24,20 @@ MSG_DICT = {
     "0x92": "Data holdup: Measurement data could not be sent via the master interface",
 }
 
+#Standard measurement parameters for code testing
+measurement_mode =  4, #measurement_mode (int): Measurement mode (1=2-point, 2=4-point, 3=3-point)
+measurement_channel = "bnc port" , #measurement_channel (str): Measurement channel to use (e.g., "Main Port")
+current_measurement_range = 'autoranging' , #current_measurement_range (str): Current measurement range (e.g., "10mA")
+voltage_measurement_range = '1V' , #voltage_measurement_range (str): Voltage measurement range (e.g., "1V")
+frequnecy_sweep = True, #frequnecy_sweep (bool): Whether to perform a frequency sweep (True/False).
+frquency_list = [1000.0, 2000.0, 5000.0, 10000.0, 20000.0, 50000.0], #frquency_list (list): List of frequencies to measure.
+start_frequency =  1000.0,     #start_frequency (str): Starting frequency, e.g., "1kHz".
+end_frequency  = 50000.0,    #end_frequency (str): Ending frequency, e.g., "10MHz".
+count = 21, #count (int): Number of frequency points.
+scale = 'log', #scale (str): Scale type, "log" or "linear".
+precision = 1.0, #precision (float): Measurement precision.
+amplitude = 0.25, #amplitude (str): Signal amplitude.
+excitation_type = 'voltage' #excitation_type (str): Type of excitation, "voltage" or "current".
 class ISX3:
     def __init__(self) -> None:
         """
@@ -35,6 +50,7 @@ class ISX3:
         self.print_msg = True
         self.tcp_protocol = None
         self.frequencies = []
+        self.frequency_list = []
 
     def is_port_available(self, port: str) -> bool:
         """
@@ -145,6 +161,7 @@ class ISX3:
         self.tcp_protocol = None
         self.device = None
         return None"""
+    
     def system_message_callback_usb_fs(self):
         """
         Reads system messages from the serial buffer and interprets them.
@@ -203,8 +220,8 @@ class ISX3:
         self.device.write(command)
         self.system_message_callback_usb_fs()
 
-    def set_fs_settings(self, measurement_mode, measurement_channel="Main Port",
-                        current_measurement_range="autoranging", voltage_measurement_range="1V"):
+    def set_fs_settings(self, measurement_mode, measurement_channel,
+                        current_measurement_range, voltage_measurement_range):
         """
                 Configures the frontend settings for the measurement.
 
@@ -354,7 +371,7 @@ class ISX3:
                 print("No valid B1 frame found for this channel.")
         print("\n")
 
-    def set_setup_single_frequency_point(self,single_frequency_point, precision, amplitude, excitation_type):
+    def set_setup_single_frequency_point(self,frequency, precision, amplitude, excitation_type):
         """
                 Configures the measurement setup parameters for a single frequency point.
     
@@ -371,7 +388,7 @@ class ISX3:
 
         self.frequency_points = 1
 
-        frequency_data = input_user.check_single_frequency_point(single_frequency_point)
+        frequency_data = input_user.check_single_frequency_point(frequency)
         
         # HIER: Einzelfrequenz entpacken und speichern
         single_f = struct.unpack(">f", bytes(frequency_data))[0]
@@ -395,6 +412,63 @@ class ISX3:
         self.write_command_string(settings_formatted)
         print("Set the setup. \n")
 
+    
+    def set_frequency_setup(self, frequency_sweep, frequency_list, start_frequency, end_frequency, count, scale, precision, amplitude: str, excitation_type: str):
+        """
+                Configures the measurement setup parameters for a list of frequency points.
+    
+                Args:
+                    frequency_sweep (bool): Indicates if a frequency sweep is to be performed.
+                    frequency_list (list): List of frequency points for measurement.
+                    start_frequency (str): Starting frequency.
+                    end_frequency (str): Ending frequency.
+                    count (int): Number of frequency points.
+                    scale (str): Scale type, "log" or "linear".
+                    precision (float): Measurement precision.
+                    amplitude (str): Signal amplitude.
+                    excitation_type (str): Type of excitation, "voltage" or "current".
+                """
+        self.print_msg = False
+        # eigentlich darf hier nur ein Frequenzwert verarbeitet werden, da nur eine Frequenz in Messung geladen wird
+        # resets the setup
+        self.device.write(bytearray([0x86, 0x01, 0x01, 0x86]))
+
+        #check if frequency_sweep is True or False and set the setup accordingly
+        if frequency_sweep:
+            
+            if len.input_user.check_frequency_range(start_frequency, end_frequency) == 2:
+                if scale == "lin":
+                    frequency_list = np.linspace(start_frequency, end_frequency, count).tolist()
+                elif scale == "log":
+                    frequency_list = np.logspace(np.log10(start_frequency), np.log10(end_frequency), count).tolist()
+
+            self.set_setup_frequency_sweep(start_frequency, end_frequency, count, scale, precision, amplitude, excitation_type)
+            
+        else:
+            
+            self.frequency_points = len(frequency_list)
+            #check if frequency_list is valid and convert to 4-byte representation
+            frequency_data = input_user.check_frequency_list(frequency_list)
+        
+        #creates a list of the choosen frequeny, the precision, the amplitude 
+
+        settings_formatted = [0xB6, 0x0D, 0x02]
+
+        for data in frequency_data:
+            settings_formatted.append(data)
+
+        for data in input_user.check_precision(precision):
+            settings_formatted.append(data)
+
+        for data in input_user.check_amplitude(amplitude, excitation_type):
+            settings_formatted.append(data)
+
+        settings_formatted.append(0xB6)
+        settings_formatted = bytearray(settings_formatted)
+             
+        print(settings_formatted.hex())
+        self.write_command_string(settings_formatted)
+        print("Set the setup. \n")
 
     def set_setup_frequency_sweep(self, start_frequency, end_frequency, count, scale, precision, amplitude, excitation_type):
         """
@@ -453,13 +527,12 @@ class ISX3:
 
         print("Set the setup. \n")
 
-    def start_measurement(self, spectra: int = 20, h5_filename =str ):
+    def start_measurement(self, spectra, id ):
         if not self.device:
             print("Device not connected.")
             return []
 
-        h5_filename = h5_filename 
-
+        
         spectra = input_user.check_input_spectra(spectra)
         expected_results = spectra * self.frequency_points
 
@@ -467,67 +540,18 @@ class ISX3:
 
         #starts the measuring
         self.device.write(bytearray([0xB8, 0x03, 0x01, 0x00, spectra, 0xB8]))
+        """
         Ergebnis = self.device.read(12)
-        print("Messung :",Ergebnis)
-    
+        print(f"Measurement Nr. {id}:",Ergebnis)
+        """
         # Reads the Data
         results = self.read_measurement_data(expected_results=expected_results, timeout=10.0)
         
-        print("Ergebnis:", results)
+        print(f"Results for Measurement Nr. {id}:", results)
         self.system_message_callback_usb_fs()  # read ACK or NACK
 
-        # HIER: CSV-Spaltenkopf und Zeilen-Schreiben anpassen
-        with open("measurement_results.csv", mode="w", newline='') as file:
-            writer = csv.writer(file)
-            writer.writerow(["Frequency ID", "Frequency (Hz)", "Real Part", "Imaginary Part"])
-            for row in results:
-                writer.writerow(row)
-        
-        #Write to HDF5
-        self.write_hdf5(results, h5_filename=h5_filename)
-
-        print(f"{len(results)} Measurement Results were written into measurement_results.csv.")
-
-        time.sleep(6)
         return results
 
-
-
-    
-    def write_hdf5(self, results: list, h5_filename = str):
-        """
-        create a hdf5 file, 
-        save the measurment results in a hdf5 group (1 Gruppe pro Messvorgang)
-
-        #check if contnius measurment is possible -> oder ob für jeden Messvorgang neue datein erstellt werden
-        #get the actual frequency to replace frequency id
-        """
-
-        filename = h5_filename
-        
-        results = list(results)
-
-        if  not results:
-            raise ValueError("Die Ergebnisliste ist leer.")
-        
-        # 2. Eindeutigen Gruppennamen erstellen (z. B. mit genauer Uhrzeit)
-        current_time = datetime.now().strftime("%H%M%S")
-        group_name = f"Messung_{current_time}"
-
-        with h5py.File(filename, 'a') as f:
-
-            group = f.create_group(group_name)
-
-            group.create_dataset("frequency_id", data=[r[0]for r in results])
-            group.create_dataset("real_part", data=[r[1] for r in results])
-            group.create_dataset("imaginary_part", data=[r[2] for r in results])
-
-            group.attrs["created"] = datetime.now().isoformat()
-            print(
-                f"Messung erfolgreich in Gruppe '{group_name}' "
-                f"der Datei '{filename}' gespeichert."
-            )
-        return f
 
     def read_measurement_data(self, expected_results, timeout):
         start = time.time()
@@ -547,22 +571,9 @@ class ISX3:
                         real = struct.unpack(">f", bytes(frame[4:8]))[0]
                         imag = struct.unpack(">f", bytes(frame[8:12]))[0]
                         
-                        # HIER: Frequenzwert anhand der ID ermitteln (unterstützt 0- und 1-basierte IDs)
-                        freq_val = None
-                        if hasattr(self, "frequencies") and self.frequencies:
-                            # FALL A: Es ist ein Einzelfrequenz-Setup konfiguriert (points = 1)
-                            if self.frequency_points == 1:
-                                freq_val = self.frequencies[0]
-                            
-                            # FALL B: Es ist ein Sweep aktiv (points > 1)
-                            else:
-                                if freq_id < len(self.frequencies):
-                                    freq_val = self.frequencies[freq_id]
-                                elif (freq_id - 1) < len(self.frequencies):
-                                    freq_val = self.frequencies[freq_id - 1]
                         
-                        # Frequenzwert mit in das Tupel aufnehmen
-                        results.append((freq_id, freq_val, real, imag))
+                        #include result in results tupel
+                        results.append((freq_id, real, imag))
         return results
 
     def software_reset(self):
