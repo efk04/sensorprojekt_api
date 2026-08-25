@@ -155,6 +155,47 @@ def float_to_bytes(value: float) -> list:
         """
     return list(struct.pack(">f", value))
 
+def check_frequency_list(frequency_list: list):
+    """
+        Validates a list of frequency points.
+
+        Args:
+            frequency_list (list): List of frequencies (float).
+
+        Returns:
+            list of 4 Byte frequencies in Hz.
+        """
+    
+
+    validated_frequencies = []
+    min_frequency = 0.1 #AC Messung -> untere Mesgerätgrenze: 100mHz
+    max_frequency = 10000000.0 #Obere Messgerätgrenze: 10MHz
+    default_start_frequency = 1000.0
+    default_end_frequency = 1000000.0
+
+    #sort list in ascending order
+    frequency_list.sort()
+    #get start and end frequency from list
+    start_frequency = frequency_list[0] 
+    end_frequency = frequency_list[-1]
+
+    #check if start frequency and end frequency are valid
+    if start_frequency > end_frequency:
+        print("start frequency is greater than end frequency. Using default frequency values.")
+        start_frequency = default_start_frequency
+        end_frequency = default_end_frequency
+
+    if start_frequency < min_frequency:
+        print(f"your start frequency is less than {min_frequency} Hz. Using default start frequency.")
+        start_frequency = default_start_frequency
+
+    if end_frequency > max_frequency:
+        print(f"your end frequency is greater than {max_frequency} Hz. Using default end frequency.")
+        start_frequency = default_start_frequency
+
+    validated_frequencies = [float_to_bytes(freq) for freq in frequency_list]
+    return validated_frequencies
+    
 def check_single_frequency_point (frequency: float):
     """ 
         Validates a single frequency point and converts it to byte representation.
@@ -168,9 +209,20 @@ def check_single_frequency_point (frequency: float):
 
     min_frequency = 0.1 #AC Messung -> untere Mesgerätgrenze: 100mHz
     max_frequency = 10000000.0 #Obere Messgerätgrenze: 10MHz
+    default_frequency = 1000.0
     
-    if single_frequency_point > max_frequency or single_frequency_point < min_frequency:
-        print("frequency out of range. No AC-Measurment possible. Chose a frequnecy between 0.1 Hz and 10 MHz.")
+    
+    if frequency > max_frequency:
+        print(f"your frequency is more than {max_frequency} Hz. Using default frequency of {default_frequency} Hz.")
+        frequency = default_frequency
+        
+
+    if frequency < min_frequency:
+        print(f"your frequency is less than {min_frequency} Hz. Using default frequency of {default_frequency} Hz.")
+        frequency = default_frequency
+
+
+
     
     return float_to_bytes(single_frequency_point)
 
