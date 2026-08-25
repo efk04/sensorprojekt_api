@@ -6,5 +6,5 @@ isx3.venv/
 my_test_main.py
 Test_plt-ion.py
 Main_kontinuierlich_Messen.py
-ISX3_measurement_copy.py
+ISX3_measurment_copy.py
 Auswertung_Messung.py
