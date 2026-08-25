@@ -89,6 +89,7 @@ if cfg and ser and transmitter:
         for i in range(1):
             transmitter.start_measurement(cfg.measurement.number_of_spectra)
             data = command.read_answer(ser)
+            print("Rohdaten: ", data)
             data = stringarray_to_intarray(data)
             print(data)
 
