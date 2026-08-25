@@ -9,6 +9,8 @@ import struct
 from src.TEST_ISX3 import ISX3
 import src.command_functions as command
 
+from src.helper_functions import *
+
 import config.config_transmitter as config_transmitter
 import config.config_handler as config_handler
 
@@ -87,6 +89,7 @@ if cfg and ser and transmitter:
         for i in range(1):
             transmitter.start_measurement(cfg.measurement.number_of_spectra)
             data = command.read_answer(ser)
+            data = stringarray_to_intarray(data)
             print(data)
 
     finally:
