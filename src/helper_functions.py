@@ -10,3 +10,4 @@ def stringarray_to_intarray(string_array):
             print(f"Ungültiger Hex-String: {string}")
             int_array.append(0)  # Füge einen Standardwert hinzu oder handle den Fehler anders
     return int_array
+

@@ -12,6 +12,7 @@ import numpy as np
 
 from datetime import datetime
 from typing import Iterable, List, Tuple
+
 MSG_DICT = {
     "0x01": "No message inside the message buffer",
     "0x02": "Timeout: Communication-timeout (less data than expected)",
@@ -24,20 +25,7 @@ MSG_DICT = {
     "0x92": "Data holdup: Measurement data could not be sent via the master interface",
 }
 
-#Standard measurement parameters for code testing
-measurement_mode =  4, #measurement_mode (int): Measurement mode (1=2-point, 2=4-point, 3=3-point)
-measurement_channel = "bnc port" , #measurement_channel (str): Measurement channel to use (e.g., "Main Port")
-current_measurement_range = 'autoranging' , #current_measurement_range (str): Current measurement range (e.g., "10mA")
-voltage_measurement_range = '1V' , #voltage_measurement_range (str): Voltage measurement range (e.g., "1V")
-frequnecy_sweep = True, #frequnecy_sweep (bool): Whether to perform a frequency sweep (True/False).
-frquency_list = [1000.0, 2000.0, 5000.0, 10000.0, 20000.0, 50000.0], #frquency_list (list): List of frequencies to measure.
-start_frequency =  1000.0,     #start_frequency (str): Starting frequency, e.g., "1kHz".
-end_frequency  = 50000.0,    #end_frequency (str): Ending frequency, e.g., "10MHz".
-count = 21, #count (int): Number of frequency points.
-scale = 'log', #scale (str): Scale type, "log" or "linear".
-precision = 1.0, #precision (float): Measurement precision.
-amplitude = 0.25, #amplitude (str): Signal amplitude.
-excitation_type = 'voltage' #excitation_type (str): Type of excitation, "voltage" or "current".
+
 class ISX3:
     def __init__(self) -> None:
         """
