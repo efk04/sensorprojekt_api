@@ -1,20 +1,40 @@
-#Measurment Hauptfunktion
-
+"""
+ISX3_measurements.py contains the classes for: 
+- preparing the measurement config for the measurement process
+- setting up plot-templates used for live-plotting and the plotting of saved results
+- starting measurement process including the liveplot and saving the results
+"""
 #Imports
 from datetime import datetime
+from pathlib import Path
 import time
 import matplotlib.pyplot as plt
 import h5py
 import numpy as np
 import pandas as pd
 import json
+import sys
+import os
 
 #import Classes
+#helper function to find the classes under the /src path
+current_folder = os.path.dirname(os.path.abspath(__file__))
+main_folder = os.path.abspath(os.path.join(current_folder, "..")) # Anpassen, falls dein Skript noch tiefer liegt
+
+if main_folder not in sys.path:
+    sys.path.append(main_folder)
+
 from src.TEST_ISX3 import ISX3
 import src.test_check_User_Input as check_user_input
 
 
 class user_input:
+    """
+    user-input class for:
+    - getting the user config for the measurement settings
+    - preparing the measurement settings in a measurement settings queue
+    """
+
     def __init__(self):
         self.measurement_setup_queue = []  #list of dictionarys to hold measurement setups
         self.raw_settings = {} # empty dictionary to hold raw measurement settings from user
@@ -94,17 +114,15 @@ input = user_input()
 queue = input.generate_measurement_queue()
 print(queue)
 
-"""
-Nächste Schritte
-1. Schleifenfunktion (Laden, messen, auswerten, speichern) über listeninhalt in queue definieren
-2. Load_setup funktion -> muss einstellungen in die befehle und in 4 bit format übersetzen -> orientierung an set_single_freuency_point
-    -> Gleichzeitig Messsetup in H5 gruppe der Messung speichern -> Name der Gruppe nach setup_id
-3. start measurment funktion integriern
-4. liveplot update funktion
-5. speichern der ergebnisse in h5 
-    -> Gleichzeitig Messsetup in H5 gruppe der Messung speichern -> Name der Gruppe nach setup_id
-"""
+
+
 class plot_template:
+
+    """
+    plot_template class for:
+    - create a template for diffrent plot types (impedance-freq, nyquist, bode) 
+      wich is used in the live-plot or in to plot saved h5-file results
+    """
 
     def __init__(self):
         self.fig = plt.figure(figsize=(10,5))
@@ -117,11 +135,6 @@ class plot_template:
 
         plt.show()
 
-        
-        
-
-    
-            
     
     def nyquist_plot(self):
         pass
@@ -131,6 +144,13 @@ class plot_template:
 
 
 class Measurement:
+    """
+    Measurement class for:
+    - initializing the measurement process
+    - starting liveplot
+    - saving the measurement configuration and results to an HDF5 file
+    """
+
     def __init__(self):
         
                    # Initializes an ISX3 device handler.
@@ -149,7 +169,7 @@ class Measurement:
         self.measurement_setup_queue = []  # List to hold measurement setups
         self.results = []  # List to hold measurement data
         
-        #device definieren aus device class, bzw. aus anderer library
+        #include other librarys
         self.device = ISX3()
         self.input = user_input()
         self.plttemp = plot_template()
@@ -157,10 +177,6 @@ class Measurement:
         #start liveplot (evtl. später noch abfragen ob liveplot gewünscht ist)
         plt.ion() #interactive mode on
     
-    def _init_plot_template(self):
-        #hier plot_template einfügen -> am besten in eine eigene Klasse auslagern
-        pass
-
 
     def load_measurement_setup(self, settings):
         #load measurement setup for one frequency setup from self.measurement_setup_queue in device 
@@ -189,9 +205,17 @@ class Measurement:
         results = []
         results = self.device.start_measurement(spectra = current_setup["spectra"], id = current_setup["id"]) #spectra counts the measurement repetitions
         return results
-    
+
+    def create_h5_file(self):
+        #creates a new H5 file for the whole measurement campaign, and saves the data in H5 format under "measurements"
+        current_date = datetime.now().strftime("%Y%m%d-%H%M%S")
+        self.filename = f"measurement_results_{current_date}.h5"
+        h5_file = h5py.File(f"measurements/{self.filename}", 'w')
+        print(f"Creates Measurement-File: {self.filename}")
+
+        
     def safe_measurement_settings(self,settings):
-        #saves the general sttings for the measurement before the measurement
+        #saves the general settings for the measurement before the measurement
 
         group_name = "1-Measurement_Settings"
 
@@ -206,28 +230,29 @@ class Measurement:
         return f
 
 
-    def safe_measurment(self, results, current_setup ):
+    def safe_measurment(self, results, current_setup, timestamp_measurement ):
         #defines H5 filename and saves measurement settings and the measurement results in H5 format via h5py (1 group per measurement repetition)
        
         id = current_setup["id"]
-    
-
-        if  not results:
+        ts = results[1]
+        res = [results[0]]
+        
+        if  not res:
             raise ValueError("no results")
         
         #creates groupnames with the id -> Number of measurement
         group_name = f"Measurement_{id}"
 
-        with h5py.File(self.filename, 'a') as f:
+        with h5py.File(f"measurements/{self.filename}", 'a') as f:
 
             group = f.create_group(group_name)
 
             #measurement results
-
+            group.create_dataset("timestamp", data = ts)
             group.create_dataset("frequency", data = current_setup["frequency"]) #single frequency point
-            group.create_dataset("frequency_id", data=[r[0] for r in results]) #counts number of measurements with one frequency
-            group.create_dataset("real_part", data=[r[1] for r in results])
-            group.create_dataset("imaginary_part", data=[r[2] for r in results])
+            group.create_dataset("frequency_id", data=[r[0] for r in res]) #counts number of measurements with one frequency
+            group.create_dataset("real_part", data=[r[1] for r in res])
+            group.create_dataset("imaginary_part", data=[r[2] for r in res])
 
 
             group.attrs["created"] = datetime.now().isoformat()
@@ -240,20 +265,22 @@ class Measurement:
 
     def update_live_plot(self, results, current_setup):
         #update and scale live plot with new data
-        #1. get data from self.measurment_data
-        #2. bestehende Linie mit neuen daten aktualisieren (verhindert neues Fenster)
-        #3. Achsen Grenzwert dynamisch anpassen
-        #4. canvas neu zeichnen, einfügen von plt.pause(0.01) um das Fenster zu aktualisieren / für GUI Ergebnisverarbeitung
-     
+ 
+        id = current_setup["id"]
+        ts = results[1]
+        res = [results[0]]
 
         frequency = current_setup["frequency"]
-        freq_id = [r[0] for r in results]
-        real = [r[1] for r in results]
-        imag = [r[2] for r in results]   
+        freq_id = [r[0] for r in res]
+        real = [r[1] for r in res]
+        imag = [r[2] for r in res]   
 
         #plots the impedance_frequency plot
-        self.plttemp.impedance_frequency_plot( frequency = frequency, freq_id =freq_id,real = real,imag = imag)
-            
+        #only one plot can be shown in the liveplot!
+        #Auswahlfunktion für plotformat erstellen?
+        #self.plttemp.impedance_frequency_plot( frequency = frequency, freq_id =freq_id,real = real,imag = imag)
+        #self.plttemp.nyquist_plot(real = real, imag = imag) 
+        self.plttemp.bode_plot(frequency = frequency,real = real,imag = imag)
         plt.pause(0.1)#short break
 
     #Methode for main loop
@@ -266,11 +293,8 @@ class Measurement:
         #4. update and scale live plot 
         #5. save measurment data in H5 format
 
-        #creates a new H5 file for the whole measurement campaign, and saves the data in H5 format
-        current_date = datetime.now().strftime("%Y%m%d-%H%M%S")
-        self.filename = f"measurement_results_{current_date}.h5"
-        h5_file = h5py.File(self.filename, 'w')
-        print(f"Creates Measurement-File: {self.filename}")
+        #create measurement file
+        self.create_h5_file()
 
         #connects device via USB
         self.device.connect_device_fs("COM3") 

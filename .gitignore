@@ -1,8 +1,13 @@
-measurement_results.csv
+#folders
 __pycache__/
 isx3.venv/
+measurements/
+
+#datatype
 *.h5
 *.png
-measurements/
+
+#scripts
 test_config.py
+ISX3_measurment_copy.py
 
