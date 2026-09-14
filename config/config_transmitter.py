@@ -11,10 +11,10 @@ class ISX3Transmitter:
     Erfordert ein ISX3DeviceConfig Objekt (aus dem Config-Parser).
     """
 
-    # Bekannte System-Nachrichten (ACK/NACK)
+    # Bekannte System-Nachrichten (ACK/NACK), siehe Handbuch Kapitel 6.2 "Acknowledge messages"
     ACK_TAG = 0x18
     ACK_SUCCESS = 0x83
-    NACK_SYNTAX = 0x81
+    NACK_NOT_EXECUTED = 0x81  # Befehl war syntaktisch gültig, wurde aber nicht ausgeführt (z.B. fehlende Voraussetzung wie kein geladenes Setup)
     NACK_NOT_RECOGNIZED = 0x82
 
     def __init__(self, serial_port: serial.Serial):
@@ -34,7 +34,11 @@ class ISX3Transmitter:
 
         # Frame zusammensetzen
         frame = bytes([cmd_tag, length]) + data + bytes([cmd_tag])
-        
+
+        # Puffer leeren: verwirft Störbytes (z.B. unaufgeforderte System-Nachrichten), die sonst
+        # die Byte-Ausrichtung der Antwort auf DIESEN Befehl durcheinanderbringen würden.
+        self.ser.reset_input_buffer()
+
         # Senden
         self.ser.write(frame)
         self.ser.flush()
@@ -46,21 +50,30 @@ class ISX3Transmitter:
         """
         Liest den Rückgabe-Frame und prüft auf erfolgreiches Acknowledge.
         Ein ACK-Frame sieht so aus: 0x18 0x01 [Status] 0x18[cite: 2]
+        Sucht aktiv nach dem Start-Tag 0x18, um sich nach evtl. verbliebenen Störbytes
+        im Puffer wieder auf den Frame-Anfang zu synchronisieren.
         """
-        # Wir erwarten 4 Bytes für das ACK
-        ack_frame = self.ser.read(4)
-        
-        if len(ack_frame) < 4:
+        tag = self.ser.read(1)
+        while tag and tag[0] != self.ACK_TAG:
+            tag = self.ser.read(1)
+
+        if not tag:
             raise TimeoutError(f"Timeout beim Warten auf ACK für Befehl {hex(original_cmd_tag)}")
 
-        if ack_frame[0] != self.ACK_TAG or ack_frame[3] != self.ACK_TAG:
+        rest = self.ser.read(3)
+        if len(rest) < 3:
+            raise TimeoutError(f"Timeout beim Warten auf ACK für Befehl {hex(original_cmd_tag)}")
+
+        ack_frame = tag + rest
+
+        if ack_frame[3] != self.ACK_TAG:
             raise ConnectionError(f"Ungültiger ACK-Frame empfangen: {ack_frame.hex()}")
 
         status = ack_frame[2]
         if status == self.ACK_SUCCESS:
             return  # Alles in Ordnung[cite: 2]
-        elif status == self.NACK_SYNTAX:
-            raise ValueError(f"NACK (0x81): Falsche Syntax für Befehl {hex(original_cmd_tag)}[cite: 2]")
+        elif status == self.NACK_NOT_EXECUTED:
+            raise ValueError(f"NACK (0x81): Befehl {hex(original_cmd_tag)} war gültig, wurde aber nicht ausgeführt (z.B. fehlt eine Voraussetzung wie ein geladenes Setup)")
         elif status == self.NACK_NOT_RECOGNIZED:
             raise ValueError(f"NACK (0x82): Befehl {hex(original_cmd_tag)} nicht erkannt[cite: 2]")
         else:
@@ -103,13 +116,18 @@ class ISX3Transmitter:
         self._send_command(0xB0, fe_payload) # [cite: 2]
 
         # 4. Extension Port (0xB2)[cite: 2]
+        # Optional: nur relevant, wenn ein Extension-Port-Modul (z. B. MuxModule) angeschlossen ist.
+        # Ohne ein solches Modul quittiert das Gerät den Befehl mit NACK (0x82) - das ist kein Fehler.
         print("Übertrage Extension Port-Settings...")
         ext_payload = struct.pack('>BBBB',
                                   config.extension_port.counter_port,
                                   config.extension_port.reference_port,
                                   config.extension_port.working_sense_port,
                                   config.extension_port.working_port)
-        self._send_command(0xB2, ext_payload) #[cite: 2]
+        try:
+            self._send_command(0xB2, ext_payload) #[cite: 2]
+        except ValueError as e:
+            print(f"Extension Port-Settings übersprungen (vermutlich kein Modul angeschlossen): {e}")
 
         # 5. Frequency Setup (0xB6)[cite: 2]
         print("Übertrage Frequency-Setup...")
@@ -231,13 +249,17 @@ class ISX3Transmitter:
         self._send_command(0xB0, fe_payload) # [cite: 2]
 
         # 4. Extension Port (0xB2)[cite: 2]
+        # Optional: nur relevant, wenn ein Extension-Port-Modul (z. B. MuxModule) angeschlossen ist.
         print("Übertrage Extension Port-Settings...")
         ext_payload = struct.pack('>BBBB',
                                     counter_port,
                                     reference_port,
                                     working_sense_port,
                                     working_port)
-        self._send_command(0xB2, ext_payload) #[cite: 2]
+        try:
+            self._send_command(0xB2, ext_payload) #[cite: 2]
+        except ValueError as e:
+            print(f"Extension Port-Settings übersprungen (vermutlich kein Modul angeschlossen): {e}")
 
         # 6. DC Bias (0xB6 0x33 / 0x30)[cite: 2]
         print("Übertrage DC Bias...")
@@ -267,9 +289,9 @@ class ISX3Transmitter:
         """
 
         #get settings from current_setup dictionary
-        frequency = current_setup["frequency"],  #frequency (float or str): Frequency point for single frequency measurement
-        precision = current_setup["precision"], #precision (float): Measurement precision
-        amplitude = current_setup["amplitude"], #amplitude (str or float): Signal amplitude
+        frequency = current_setup["frequency"]  #frequency (float or str): Frequency point for single frequency measurement
+        precision = current_setup["precision"] #precision (float): Measurement precision
+        amplitude = current_setup["amplitude"] #amplitude (str or float): Signal amplitude
         excitation_type = current_setup["excitation_type"] #excitation_type (str): Type of excitation, "voltage
         point_delay_us = current_setup["point_delay_us"] #point_delay_us (int): Delay between frequency points in microseconds
         phase_sync = current_setup["phase_sync"] #phase_sync (bool): Whether to synchronize the phase between frequency points
@@ -294,17 +316,77 @@ class ISX3Transmitter:
             eops += bytes([0x03]) + struct.pack('>I', excitation_type) #[cite: 2]
 
         # Frequenzpunkt hinzufügen
-            # Single Frequency: 0x02 [Freq] [Prec] [Amp] [EOPs...][cite: 2]
-            payload = bytes([0x02]) + struct.pack('>fff', 
-                                                  frequency, 
-                                                  precision, 
-                                                  amplitude)
-            self._send_command(0xB6, payload + eops) # [cite: 2]
+        # Single Frequency: 0x02 [Freq] [Prec] [Amp] [EOPs...][cite: 2]
+        payload = bytes([0x02]) + struct.pack('>fff',
+                                              frequency,
+                                              precision,
+                                              amplitude)
+        self._send_command(0xB6, payload + eops) # [cite: 2]
             
     def start_measurement(self, number_of_spectra: int = 1):
         """
         Startet die Messung anhand der zuvor gesendeten Konfiguration (Befehl 0xB8).[cite: 2]
+        Bei number_of_spectra = 0 misst das Gerät kontinuierlich, bis stop_measurement() gesendet wird.
         """
         print(f"Starte Messung für {number_of_spectra} Spektren...")
         payload = bytes([0x01]) + struct.pack('>H', number_of_spectra) # uint16[cite: 2]
         self._send_command(0xB8, payload) # [cite: 2]
+
+    def stop_measurement(self):
+        """
+        Stoppt eine laufende Messung (Befehl 0xB8, OP=0x00 "Stop measurement").
+        Eigener, kürzerer Befehl als start_measurement (OP=0x01) - siehe Handbuch Kapitel 6.5.12:
+        Syntax: [CT] 01 00 [CT]
+        """
+        print("Stoppe Messung...")
+        self._send_command(0xB8, bytes([0x00]))
+
+    def software_reset(self):
+        """
+        Sendet einen Software-Reset (Befehl 0xA1). Setzt das Gerät aus einem
+        hängenden oder kontinuierlichen Messzustand zurück, ohne es aus- und
+        wieder einzuschalten.
+        """
+        print("Sende Software-Reset...")
+        self._send_command(0xA1, b"")
+
+    def read_measurement_frame(self, timeout: float = 1.0):
+        """
+        Liest einen einzelnen Messergebnis-Frame (Befehl 0xB8) vom Gerät.
+        Berücksichtigt einen optionalen Zeitstempel am Frame-Ende (siehe Options 0x97).
+
+        Returns:
+            dict mit freq_id, real, imag und timestamp (None falls deaktiviert),
+            oder None, wenn innerhalb von `timeout` kein vollständiger Frame empfangen wurde.
+        """
+        original_timeout = self.ser.timeout
+        self.ser.timeout = timeout
+        try:
+            while True:
+                tag = self.ser.read(1)
+                if not tag:
+                    return None
+                if tag[0] != 0xB8:
+                    continue
+
+                length_byte = self.ser.read(1)
+                if not length_byte:
+                    return None
+                length = length_byte[0]
+
+                payload = self.ser.read(length)
+                if len(payload) < length:
+                    return None
+
+                end_tag = self.ser.read(1)
+                if not end_tag or end_tag[0] != 0xB8:
+                    continue  # kein gültiger Frame, weiter nach dem naechsten Tag suchen
+
+                freq_id = int.from_bytes(payload[0:2], "big")
+                real = struct.unpack(">f", payload[2:6])[0]
+                imag = struct.unpack(">f", payload[6:10])[0]
+                timestamp = int.from_bytes(payload[10:length], "big") if length > 10 else None
+
+                return {"freq_id": freq_id, "real": real, "imag": imag, "timestamp": timestamp}
+        finally:
+            self.ser.timeout = original_timeout
