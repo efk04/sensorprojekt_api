@@ -182,7 +182,7 @@ class ISX3Transmitter:
 
 
     #seperate function to apply the only the measurement options frontend settings
-    def set_options_and_fe(self, settings): # config: ISX3DeviceConfig
+    def set_options_and_fe_settings(self, settings): # config: ISX3DeviceConfig
         """
                 Configures the frontend settings for the measurement.
 
