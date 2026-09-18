@@ -210,7 +210,7 @@ class ISX3:
         self.device.write(command)
         self.system_message_callback_usb_fs()
 
-    def start_measurement(self, spectra, id, time_of_continuous_measurement = None ):
+    def start_measurement(self, spectra, id, measurement_settings, time_of_continuous_measurement = None):
         """
         Starts the measurement process on the ISX3 device.
         when spectra is 0, it starts a continuous measurement for the specified duration.
@@ -234,6 +234,7 @@ class ISX3:
         cmd_tag = 0xB8 #cmd_tag for Start Measure
         data_start = bytes([0x01]) + spectra.to_bytes(2, 'big') #starts measurement for number of spectra (if spectra is 0 starts a continuous measurement. Send the command (B8 01 00 B8) to stop the continuous run)
         data_stop = bytes([ 0x00]) #stops measurement
+        
 
         if spectra == 0:
             self.tcm = time_of_continuous_measurement #time of continuous measurement in seconds
@@ -250,7 +251,7 @@ class ISX3:
             data = data_start
             print (f"starts measurement Nr.{id} for {spectra} measurement cycles.")
             self.device.write(bytes([cmd_tag, len(data)]) + data + bytes([cmd_tag]))
-            results = self.read_measurement_data(expected_results=expected_results, timeout=10.0)
+            results = self.read_measurement_data(expected_results=expected_results, timeout=10.0, measurement_settings = measurement_settings)
 
         print(f"Results for Measurement Nr. {id}:", results)
         return results
@@ -268,18 +269,40 @@ class ISX3:
             results: list of tuples containing (frequency_id, real_part, imaginary_part) for each measurement.
             
         """
+        tag = self.device.read(1)
+        while tag and tag[0] != 0xB8:
+            tag = self.device.read(1)
+
+        length = self.device.read(1)[0]
+        payload = self.device.read(length)
+        end_tag = self.device.read(1)
+        if end_tag[0] != 0xB8:
+            raise ValueError("Invalid end tag in measurement frame")
+
+        freq_id = int.from_bytes(payload[0:2], "big")
+        real = struct.unpack(">f", payload[2:6])[0]
+        imag = struct.unpack(">f", payload[6:10])[0]
+        results = {
+                "id": freq_id,
+                "real": real,
+                "imag": imag,
+            }
+    
+
+        """
         command_tag = 0xB8 #byte for start measurement command-tag
-        start = time.time()
-        results = {}
+        start_time = time.time()
+        #results = {}
         buffer = bytearray()
 
-
-        while time.time() - start < timeout and len(results) < expected_results:
-            bytes = self.device.read(256) #reads continuously up to 256 bytes 
-            if not bytes:
-                continue
+        while time.time() - start_time < timeout:
+            
+            bytes = self.device.read(1) #reads continuously up to 256 bytes 
+            #if not bytes:
+               # continue
             buffer.extend(bytes)
 
+            print (buffer)
             while True:
                 start = buffer.find(command_tag.to_bytes(1, "big"))
                 length = buffer[start+1]
@@ -297,16 +320,23 @@ class ISX3:
 
                 frame = buffer[:frame_length]
 
-                if frame[-1] != command_tag.to_bytes(1, "big"):
+                if frame[-1] != command_tag:
                     del buffer[0] #checks last byte of the frame -> if not start measurement CT-> delete first CT and retry
                     continue
+
+                del buffer[:frame_length]
+                
                 #read frame
                 freq_id = int.from_bytes(frame[2:4], "big")
 
                 if length == 0x0A: #no timestamp / no current range
                     real = struct.unpack(">f",frame[4:8])[0]
                     imag = struct.unpack(">f",frame[8:12])[0]
-                    results = results.append((freq_id, real, imag))
+                    results = {
+                        "id": freq_id,
+                        "real": real,
+                        "imag": imag,
+                    }
 
                 elif length == 0x0E: #timestamp ms
                     timestamp_ms = int.from_bytes(frame[4:8],"big")
@@ -363,6 +393,7 @@ class ISX3:
                     raise ValueError(
                         f"Unknown measurement frame length: 0x{length:02X}"
                     )
+        """
 
         return results
 
@@ -468,8 +499,9 @@ class ISX3:
                                     current_measurement_range,
                                     voltage_measurement_range)
         self._send_command(0xB0, fe_payload) # [cite: 2]
-        """
+        
         # 4. Extension Port (0xB2)[cite: 2]
+        """
         print("Übertrage Extension Port-Settings...")
         ext_payload = struct.pack('>BBBB',
                                     counter_port,
@@ -506,13 +538,13 @@ class ISX3:
         """
 
         #get settings from current_setup dictionary
-        
+        measurement_mode=current_setup["measurement_mode"]
+        measurement_channel=current_setup["measurement_channel"]
+        current_measurement_range=current_setup["current_measurement_range"]
+        voltage_measurement_range=current_setup["voltage_measurement_range"]
         frequency = current_setup["frequency"]  #frequency (float): Frequency point for single frequency measurement
-        print(frequency)
         precision = current_setup["precision"] #precision (float): Measurement precision
-        print(precision)
         amplitude = current_setup["amplitude"] #amplitude (float): Signal amplitude
-        print(amplitude)
         excitation_type = current_setup["excitation_type"] #excitation_type (str): Type of excitation, "voltage
         point_delay_us = current_setup["point_delay_us"] #point_delay_us (int): Delay between frequency points in microseconds
         phase_sync = current_setup["phase_sync"] #phase_sync (bool): Whether to synchronize the phase between frequency points
@@ -522,6 +554,20 @@ class ISX3:
         cmd_tag = 0x86 # CT -> Set FS Settings
         data = bytes([0x01])  
         self._send_command(cmd_tag = cmd_tag, data = data)
+
+        # 3. Frontend (0xB0)[cite: 2]
+        print("Übertrage Frontend-Settings...")
+        # Clear old frontend settings to avoid overflow
+        #cmd_tag = 0xB0 # CT -> Set FE Settings
+        data = bytes([0xFF, 0xFF, 0xFF])  
+        self._send_command(0xB0, data = data)
+        # Sende neue Frontend-Settings (Mode, Channel, C-Range, V-Range)
+        fe_payload = struct.pack('>BBBB', 
+                                    measurement_mode,
+                                    measurement_channel,
+                                    current_measurement_range,
+                                    voltage_measurement_range)
+        self._send_command(0xB0, fe_payload) # [cite: 2]
 
         # Frequency Setup (0xB6)[cite: 2]
         print("Übertrage Frequency-Setup...")

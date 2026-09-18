@@ -59,7 +59,7 @@ class user_input:
             "working_sense_port": 0,
             "working_port": 0,   
             "frequency_sweep": False, #frequency_sweep (bool): Whether to perform a frequency sweep (usage of the start, endfrequency, the count and scale option).
-            "frequency_list": [1000.0, 2000.0, 5000.0, 10000.0, 50000.0], #frequency_list (list): List of frequencies to measure. , 2000.0, 5000.0, 10000.0, 20000.0, 50000.0
+            "frequency_list": [1000.0, 2000.0, 5000.0, 10000.0, 50000.0], #frequency_list (list): List of frequencies to measure.
             "start_frequency": 1000.0,     #start_frequency (str): Starting frequency, e.g., "1kHz".
             "end_frequency": 50000.0,    #end_frequency (str): Ending frequency, e.g., "10MHz".
             "count": 21, #count (int): Number of frequency points.
@@ -274,20 +274,19 @@ class Measurement:
         spectra = current_setup["spectra"] #spectra counts the measurement repetitions
         id = current_setup["id"]
         tcm = current_setup["time_of_continuous_measurement"] #time of continuous measurement in seconds, if spectra = 0 (continuous measurement)
+        self.measurement_settings = measurement_settings
 
         if not self.device:
             print("Device not connected.")
             return []
 
-        expected_results = spectra * self.frequency_points
+        expected_results = spectra * 1
 
         print(f"Starts the measuring for {spectra} Cycles...")
 
-        #starts the measuring
-        self.device.start_measurement(spectra=spectra, id = id, time_of_continuous_measurement=tcm) #time_of_continuous_measurement in seconds, if spectra = 0 (continuous measurement)
+        #starts the measuring and Reads the Data
+        results = self.device.start_measurement(spectra=spectra, id = id, time_of_continuous_measurement=tcm, measurement_settings = self.measurement_settings) #time_of_continuous_measurement in seconds, if spectra = 0 (continuous measurement)
 
-        # Reads the Data
-        results = self.device.read_measurement_data(expected_results=expected_results, timeout=10.0, measurement_settings = measurement_settings)
         if results is None:
             print (f"No Results for measurement Nr.{id}.")
         else:
@@ -326,7 +325,7 @@ class Measurement:
        
         id = current_setup["id"]
         ts = results[1]
-        res = [results[0]]
+        res = results[0]
         
         if  not res:
             raise ValueError("no results")
@@ -341,9 +340,9 @@ class Measurement:
             #measurement results
             group.create_dataset("timestamp", data = ts)
             group.create_dataset("frequency", data = current_setup["frequency"]) #single frequency point
-            group.create_dataset("frequency_id", data=[res["id"]]) #counts number of measurements with one frequency
-            group.create_dataset("real_part", data=[res["real"]])
-            group.create_dataset("imaginary_part", data=[res["imag"]])
+            group.create_dataset("frequency_id", data=res["id"]) #counts number of measurements with one frequency
+            group.create_dataset("real_part", data=res["real"])
+            group.create_dataset("imaginary_part", data=res["imag"])
 
 
             group.attrs["created"] = datetime.now().isoformat()
@@ -357,12 +356,12 @@ class Measurement:
     def update_live_plot(self, results, current_setup):
         #update and scale live plot with new data
 
-        res = [results[0]]
+        res = results[0]
 
         frequency = current_setup["frequency"]
-        freq_id = [res["id"]]
-        real = [res["real"]]
-        imag = [res["imag"]]   
+        freq_id = res["id"]
+        real = res["real"]
+        imag = res["imag"]
 
         #plots the impedance_frequency plot
         #only one plot can be shown in the liveplot! ->Auswahlfunktion für plotformat erstellen?

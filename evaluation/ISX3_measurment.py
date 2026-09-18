@@ -127,17 +127,62 @@ class plot_template:
     def __init__(self):
         self.fig = plt.figure(figsize=(10,5))
 
+ 
     def impedance_frequency_plot(self, frequency, freq_id, real, imag):
-        #creates a plot that shows the impedance in realation to the frequency
-        self.fig
-        plt.plot(frequency, real, 'ro',color='g') #red circles for real values
-        plt.plot(frequency, imag, 'bs',color='g') #blue squres for imag values
+        #get data
+        line_real, = plt.plot(frequency, real, 'ro', color='g', label='Real part')
+        line_imag, = plt.plot(frequency, imag, 'bs', color='b', label='Imaginary part')
+        #decorate plot
+        plt.xscale('log')                      # Logarithmische X-Achse (Standard in der Elektrotechnik/Spektroskopie)
+        plt.xlabel('Frequency $f$ / Hz')        # Achsenbeschriftung X mit LaTeX-Formatierung
+        plt.ylabel('Impedance $Z$ / $\\Omega$')  # Achsenbeschriftung Y
+        plt.title('Impedance as a Function of Frequency')  # Diagrammtitel
+        plt.grid(True, which="both", ls="--", alpha=0.3)
+        plt.tick_params(direction='in', which='both', top=True, right=True)
+        plt.legend(
+            handles=[line_real, line_imag],
+            labels=[r'$Z_{real}$', r'$Z_{imag}$'],
+            loc='center left',     bbox_to_anchor=(1.02, 0.5),  # Positioniert rechts vom Plot
+            title='Legend',
+            frameon=True
+        )
+        #move plot to the right to show the legend
+        plt.subplots_adjust(right=0.8)
 
+        
         plt.show()
-
+       
     
-    def nyquist_plot(self):
-        pass
+    def nyquist_plot(self, real, imag):
+            # Nyquist-Plot: Z_imag vs Z_real 
+            line_nyquist, = plt.plot(real, imag, 'ro', color='b', label='Nyquist data')
+            
+            # Wissenschaftliches Styling
+            plt.xlabel('Real part $Z_{real}$ / $\\Omega$')
+            plt.ylabel('Imaginary part $Z_{imag}$ / $\\Omega$')
+            plt.title('Nyquist Plot')
+            #
+            plt.axhline(0, color='black', linewidth=0.8, linestyle='-')
+            plt.axvline(0, color='black', linewidth=0.8, linestyle='-')
+            max_val = max(max(abs(r) for r in real), max(abs(i) for i in imag)) * 1.15
+            # Wichtig beim Nyquist-Plot: Gleiches Seitenverhältnis (Equal Aspect Ratio), 
+            # damit Kreise/Halbkreise nicht verzerrt werden!
+            plt.gca().set_aspect('equal', adjustable='box')
+            
+            plt.grid(True, which="both", ls="--", alpha=0.3)
+            plt.tick_params(direction='in', which='both', top=True, right=True)
+            
+            plt.legend(
+                handles=[line_nyquist],
+                labels=[r'$Z_{imag}$ vs $Z_{real}$'],
+                loc='center left',    
+                bbox_to_anchor=(1.02, 0.5),  
+                title='Legend',
+                frameon=True
+            )
+            
+            plt.subplots_adjust(right=0.8)
+            plt.show()
 
     def bode_plot(self):
         pass
@@ -230,11 +275,11 @@ class Measurement:
         return f
 
 
-    def safe_measurment(self, results, current_setup, timestamp_measurement ):
+    def safe_measurment(self, results, current_setup):
         #defines H5 filename and saves measurement settings and the measurement results in H5 format via h5py (1 group per measurement repetition)
        
         id = current_setup["id"]
-        ts = results[1]
+        #ts = results[1]
         res = [results[0]]
         
         if  not res:
@@ -248,7 +293,7 @@ class Measurement:
             group = f.create_group(group_name)
 
             #measurement results
-            group.create_dataset("timestamp", data = ts)
+            #group.create_dataset("timestamp", data = ts)
             group.create_dataset("frequency", data = current_setup["frequency"]) #single frequency point
             group.create_dataset("frequency_id", data=[r[0] for r in res]) #counts number of measurements with one frequency
             group.create_dataset("real_part", data=[r[1] for r in res])
@@ -267,7 +312,7 @@ class Measurement:
         #update and scale live plot with new data
  
         id = current_setup["id"]
-        ts = results[1]
+        #ts = results[1]
         res = [results[0]]
 
         frequency = current_setup["frequency"]
@@ -276,11 +321,10 @@ class Measurement:
         imag = [r[2] for r in res]   
 
         #plots the impedance_frequency plot
-        #only one plot can be shown in the liveplot!
-        #Auswahlfunktion für plotformat erstellen?
-        #self.plttemp.impedance_frequency_plot( frequency = frequency, freq_id =freq_id,real = real,imag = imag)
+        #only one plot can be shown in the liveplot! ->Auswahlfunktion für plotformat erstellen?
+        self.plttemp.impedance_frequency_plot( frequency = frequency, freq_id =freq_id,real = real,imag = imag)
         #self.plttemp.nyquist_plot(real = real, imag = imag) 
-        self.plttemp.bode_plot(frequency = frequency,real = real,imag = imag)
+        #self.plttemp.bode_plot(frequency = frequency,real = real,imag = imag)
         plt.pause(0.1)#short break
 
     #Methode for main loop
