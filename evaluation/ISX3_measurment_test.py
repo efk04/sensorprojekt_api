@@ -135,14 +135,6 @@ class user_input:
         return self.measurement_setup_queue
     
 
-input = user_input()    
-#input.generate_measurement_queue()
-
-queue = input.generate_measurement_queue()
-print(queue)
-
-
-
 class plot_template:
 
     """
@@ -435,8 +427,15 @@ class Measurement:
         plt.show() #keep plot open until user closes it
 
 
-Measurement = Measurement()
-#starts measurement, live plot and save data in H5 format
-Measurement.measurement()
-        
+def test_ISX3_measurment():
+    input = user_input()    
+    #input.generate_measurement_queue()
+
+    queue = input.generate_measurement_queue()
+    print(queue)
+
+    Measurement = Measurement()
+    #starts measurement, live plot and save data in H5 format
+    Measurement.measurement()
+
 #read measurmenet auf ausgabe anpasssen

@@ -543,7 +543,4 @@ class ISX3:
                                                 precision, 
                                                 amplitude)
         
-        self._send_command(cmd_tag, payload + eops) # [cite: 2]
-     
-
-        
+        self._send_command(cmd_tag, payload + eops) # [cite: 2]  
