@@ -71,7 +71,7 @@ class user_input:
             "phase_sync": 0, # Phasensynchrones Umschalten (EOP 0x02): 0 = Inaktiv, 1 = Aktiv
             "DC_bias_enabled": 0, # DC-Bias (EOP 0x03): 0 = Inaktiv, 1 = Aktiv
             "bias_voltage": 0.0, # Bias-Spannung in Volt (float, Bereich: -1.0 V bis +1.0 V)
-            "spectra": 1, #number (int) of measurement repetitions in the measurement loop
+            "spectra": 200, #number (int) of measurement repetitions in the measurement loop
             "sync_time_us": 0, #Zeit zwischen zwei Spektrenmessungen in Mikrosekunden (uint32)
             "time_of_continuous_measurement": 30 #time of continuous measurement in seconds, if spectra = 0 (continuous measurement)
         }
@@ -266,7 +266,7 @@ class Measurement:
         spectra = current_setup["spectra"] #spectra counts the measurement repetitions
         id = current_setup["id"]
         tcm = current_setup["time_of_continuous_measurement"] #time of continuous measurement in seconds, if spectra = 0 (continuous measurement)
-        self.measurement_settings = measurement_settings
+        
 
         if not self.device:
             print("Device not connected.")
@@ -277,7 +277,7 @@ class Measurement:
         print(f"Starts the measuring for {spectra} Cycles...")
 
         #starts the measuring and Reads the Data
-        results = self.device.start_measurement(spectra=spectra, id = id, time_of_continuous_measurement=tcm, measurement_settings = self.measurement_settings) #time_of_continuous_measurement in seconds, if spectra = 0 (continuous measurement)
+        results = self.device.start_measurement(spectra=spectra, id = id, time_of_continuous_measurement=tcm, measurement_settings = measurement_settings) #time_of_continuous_measurement in seconds, if spectra = 0 (continuous measurement)
 
         if results is None:
             print (f"No Results for measurement Nr.{id}.")
@@ -350,15 +350,15 @@ class Measurement:
 
         res = results[0]
 
-        frequency = current_setup["frequency"]
+        frequency = [current_setup["frequency"]]*len(res["id"]) #spectra
         freq_id = res["id"]
         real = res["real"]
         imag = res["imag"]
 
         #plots the impedance_frequency plot
         #only one plot can be shown in the liveplot! ->Auswahlfunktion für plotformat erstellen?
-        self.plttemp.impedance_frequency_plot( frequency = frequency, freq_id =freq_id,real = real,imag = imag)
-        #self.plttemp.nyquist_plot(real = real, imag = imag) 
+        #self.plttemp.impedance_frequency_plot( frequency = frequency, freq_id =freq_id,real = real,imag = imag)
+        self.plttemp.nyquist_plot(real = real, imag = imag) 
         #self.plttemp.bode_plot(frequency = frequency,real = real,imag = imag)
         plt.pause(0.1)#short break
 
@@ -410,7 +410,7 @@ class Measurement:
             #start measurment and collect data
             results = self.start_measurement(current_setup = current_setup, measurement_settings =  self.measurements_settings)
             print(results)
-     
+            
             #update live plot with new data
             self.update_live_plot(results = results, current_setup=current_setup)
 
@@ -425,16 +425,16 @@ class Measurement:
         plt.ioff() #interactive mode off
         plt.show() #keep plot open until user closes it
 
-
-def test_ISX3_measurment():
+Measurement = Measurement()
+def test_ISX3_measurement():
     input = user_input()    
     #input.generate_measurement_queue()
 
     queue = input.generate_measurement_queue()
     print(queue)
 
-    Measurement = Measurement()
+    
     #starts measurement, live plot and save data in H5 format
     Measurement.measurement()
 
-#read measurmenet auf ausgabe anpasssen
+test_ISX3_measurement()

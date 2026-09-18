@@ -229,7 +229,6 @@ class ISX3:
             return []
 
         spectra = input_user.check_input_spectra(spectra)
-        expected_results = spectra * 1
         #specific tags for the ISX3
         cmd_tag = 0xB8 #cmd_tag for Start Measure
         data_start = bytes([0x01]) + spectra.to_bytes(2, 'big') #starts measurement for number of spectra (if spectra is 0 starts a continuous measurement. Send the command (B8 01 00 B8) to stop the continuous run)
@@ -251,13 +250,13 @@ class ISX3:
             data = data_start
             print (f"starts measurement Nr.{id} for {spectra} measurement cycles.")
             self.device.write(bytes([cmd_tag, len(data)]) + data + bytes([cmd_tag]))
-            results = self.read_measurement_data(expected_results=expected_results, timeout=10.0, measurement_settings = measurement_settings)
+            results = self.read_measurement_data(spectra=spectra, timeout=10.0, measurement_settings = measurement_settings)
 
         print(f"Results for Measurement Nr. {id}:", results)
         return results
 
 
-    def read_measurement_data(self, expected_results, timeout, measurement_settings):
+    def read_measurement_data(self, spectra, timeout, measurement_settings):
         """
         Reads measurement data from the ISX3 device.
         
@@ -269,131 +268,91 @@ class ISX3:
             results: list of tuples containing (frequency_id, real_part, imaginary_part) for each measurement.
             
         """
-        tag = self.device.read(1)
-        while tag and tag[0] != 0xB8:
+        current_range = 0
+        timestamp_ms = 0
+        timestamp_us = 0
+
+        results = {"id": [],
+                   "real": [],
+                   "imag": [],
+                   "timestamp":[],
+                   "timestamp_unit": [],
+                   "current_range": []
+        }
+
+        while len(results["id"]) < spectra:
             tag = self.device.read(1)
+            while tag and tag[0] != 0xB8:
+                tag = self.device.read(1)
 
-        length = self.device.read(1)[0]
-        payload = self.device.read(length)
-        end_tag = self.device.read(1)
-        if end_tag[0] != 0xB8:
-            raise ValueError("Invalid end tag in measurement frame")
+            length = self.device.read(1)[0]
+            frame = self.device.read(length) 
+            end_tag = self.device.read(1)
+            if end_tag[0] != 0xB8:
+                raise ValueError("Invalid end tag in measurement frame")
 
-        freq_id = int.from_bytes(payload[0:2], "big")
-        real = struct.unpack(">f", payload[2:6])[0]
-        imag = struct.unpack(">f", payload[6:10])[0]
-        results = {
-                "id": freq_id,
-                "real": real,
-                "imag": imag,
-            }
-    
+            #frame: /id(2byte)/timestamp(4->ms or 5->us byte)*/current_range(1byte)*/real(4byte)/imag(4byte)
+            #*only if timestamp/current_range is activated
+            freq_id = int.from_bytes(frame[0:2], "big")
 
-        """
-        command_tag = 0xB8 #byte for start measurement command-tag
-        start_time = time.time()
-        #results = {}
-        buffer = bytearray()
+            if length == 0x0A: #no timestamp / no current range
+                real = struct.unpack(">f",frame[2:6])[0]
+                imag = struct.unpack(">f",frame[6:10])[0]
 
-        while time.time() - start_time < timeout:
-            
-            bytes = self.device.read(1) #reads continuously up to 256 bytes 
-            #if not bytes:
-               # continue
-            buffer.extend(bytes)
 
-            print (buffer)
-            while True:
-                start = buffer.find(command_tag.to_bytes(1, "big"))
-                length = buffer[start+1]
-                frame_length = 1 + 1 + length + 1  # CT + LE + Payload + CT
+            elif length == 0x0E: #timestamp ms
+                timestamp_ms = struct.unpack(">i",frame[2:6])[0]
+                real = struct.unpack(">f",frame[6:10])[0]
+                imag = struct.unpack(">f",frame[10:14])[0]
 
-                if start == -1: 
-                    buffer.clear()  
-                    break #no start measurement CT found
 
-                if start > 0:
-                    del buffer[:start] #clear buffer before first measurement-data
+            elif length == 0x0F and measurement_settings["enable_current_range_output"] == 0: #timestamp us no current range
+                timestamp_us = struct.unpack(">i",frame[2:7])[0]
+                real = struct.unpack(">f",frame[7:11])[0]
+                imag = struct.unpack(">f",frame[11:15])[0]
 
-                if len(buffer) < frame_length:
-                    break #no complete measurement frame
 
-                frame = buffer[:frame_length]
+            elif length == 0x0B: #current range
+                current_range = frame[3]
+                real = struct.unpack(">f",frame[3:7])[0]
+                imag = struct.unpack(">f",frame[7:11])[0]
 
-                if frame[-1] != command_tag:
-                    del buffer[0] #checks last byte of the frame -> if not start measurement CT-> delete first CT and retry
-                    continue
-
-                del buffer[:frame_length]
                 
-                #read frame
-                freq_id = int.from_bytes(frame[2:4], "big")
 
-                if length == 0x0A: #no timestamp / no current range
-                    real = struct.unpack(">f",frame[4:8])[0]
-                    imag = struct.unpack(">f",frame[8:12])[0]
-                    results = {
-                        "id": freq_id,
-                        "real": real,
-                        "imag": imag,
-                    }
+            elif length == 0x0F and  measurement_settings["enable_current_range_output"] != 0: #timestamp + current range
+                timestamp_ms = struct.unpack(">i",frame[2:6])[0]
+                current_range = frame[6]
+                real = struct.unpack(">f",frame[7:11])[0]
+                imag = struct.unpack(">f",frame[11:15])[0]
 
-                elif length == 0x0E: #timestamp ms
-                    timestamp_ms = int.from_bytes(frame[4:8],"big")
-                    real = struct.unpack(">f",frame[8:12])[0]
-                    imag = struct.unpack(">f",frame[12:16])[0]
-                    results = {            
-                        "id": freq_id,
-                        "timestamp": timestamp_ms,
-                        "timestamp_unit": "ms",
-                        "real": real,
-                        "imag": imag,
-                        }
 
-                elif length == 0x0F and measurement_settings.current_range ==0: #timestamp us no current range
-                    timestamp_us = int.from_bytes(frame[4:9],"big")
-                    real = struct.unpack(">f",frame[9:13])[0]
-                    imag = struct.unpack(">f",frame[13:17])[0]
-                    results = {            
-                        "id": freq_id,
-                        "timestamp": timestamp_us,
-                        "timestamp_unit": "us",
-                        "real": real,
-                        "imag": imag,
-                        }
+            else:
+                raise ValueError(
+                    f"Unknown measurement frame length: 0x{length:02X}"
+                )
 
-                elif length == 0x0B: #current range
-                    current_range = int.from_bytes(frame[4],"big")
-                    real = struct.unpack(">f",frame[5:9])[0]
-                    imag = struct.unpack(">f",frame[9:13])[0]
-                    results = {            
-                        "id": freq_id,
-                        "current_range": current_range,
-                        "timestamp_unit": "us",
-                        "real": real,
-                        "imag": imag,
-                        }
+            #write results      
+            results["id"].append(freq_id),
+            results["real"].append(real),
+            results["imag"].append(imag),
                     
+            if timestamp_ms != 0:
+                results["timestamp"].append(timestamp_ms)
+                results["timestamp_unit"].append("ms")
+            else:
+                results["timestamp"].append(None)
+                                
+            if timestamp_us != 0:
+                results["timestamp"].append(timestamp_us)
+                results["timestamp_unit"].append("us")
+            else:
+                results["timestamp"].append(None)
 
-                elif length == 0x0F and measurement_settings.current_range !=0: #timestamp + current range
-                    timestamp_ms = int.from_bytes(frame[4:8],"big")
-                    current_range = int.from_bytes(frame[8],"big")
-                    real = struct.unpack(">f",frame[9:13])[0]
-                    imag = struct.unpack(">f",frame[13:17])[0]
-                    results = {            
-                        "id": freq_id,
-                        "timestamp": timestamp_ms,
-                        "timestamp_unit": "ms",
-                        "current_range": current_range,
-                        "real": real,
-                        "imag": imag,
-                        }
+            if current_range != 0:
+                results["current_range"].append(current_range)
+            else:
+                results["timestamp"].append(None)
 
-                else:
-                    raise ValueError(
-                        f"Unknown measurement frame length: 0x{length:02X}"
-                    )
-        """
 
         return results
 
@@ -551,10 +510,11 @@ class ISX3:
 
         self.print_msg = False
         # resets the setup
-        cmd_tag = 0x86 # CT -> Set FS Settings
+        cmd_tag = 0xB6 # CT -> Set FS Settings
         data = bytes([0x01])  
         self._send_command(cmd_tag = cmd_tag, data = data)
 
+        
         # 3. Frontend (0xB0)[cite: 2]
         print("Übertrage Frontend-Settings...")
         # Clear old frontend settings to avoid overflow
@@ -568,7 +528,7 @@ class ISX3:
                                     current_measurement_range,
                                     voltage_measurement_range)
         self._send_command(0xB0, fe_payload) # [cite: 2]
-
+        
         # Frequency Setup (0xB6)[cite: 2]
         print("Übertrage Frequency-Setup...")
         # Init / Clear current setup

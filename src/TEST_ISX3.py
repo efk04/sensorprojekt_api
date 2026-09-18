@@ -551,7 +551,7 @@ class ISX3:
         
             if byte:
                 buffer.append(byte[0])
-
+                print(buffer)
                 if len(buffer) >= 13:
                     if buffer[-13] == 0xB8 and buffer[-12] == 0x0A and buffer[-1] == 0xB8:
                         frame = buffer[-13:]

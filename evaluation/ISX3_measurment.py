@@ -57,7 +57,7 @@ class user_input:
             "precision": 1.0, #precision (float): Measurement precision.
             "amplitude": 0.25, #amplitude (str): Signal amplitude.
             "excitation_type": 'voltage', #excitation_type (str): Type of excitation, "voltage" or "current". 
-            "spectra": 1, #number (int) of measurement repetitions in the measurement loop
+            "spectra": 2, #number (int) of measurement repetitions in the measurement loop
 
         }
 
