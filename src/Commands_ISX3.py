@@ -1,3 +1,8 @@
+"""
+Class for communication with the ISX3 device
+
+"""
+
 from logging import config
 import struct
 import serial
@@ -107,7 +112,7 @@ class ISX3:
                 print("Error: ", e)
 
             
-            #self.system_message_callback_usb_fs()
+            
 
     def _send_command(self, cmd_tag: int, data: bytes):
         """
@@ -153,62 +158,6 @@ class ISX3:
         else:
             raise ValueError(f"Unerwarteter Status-Code {hex(status)} empfangen.")
 
-    def system_message_callback_usb_fs(self):
-        """
-        Reads system messages from the serial buffer and interprets them.
-
-        Returns:
-            list or tuple or None: Depending on `ret_hex_int`, returns hexadecimal, integer values, both, or None.
-        """
-        timeout_count = 0
-        received = []
-        data_count = 0
-        
-        while True:
-            buffer = self.device.read()
-            if buffer:
-                received.extend(buffer)
-                data_count += len(buffer)
-                timeout_count = 0
-                continue
-            timeout_count += 1
-            if timeout_count >= 1:
-                # Break if we haven't received any data
-                break
-
-            received = "".join(str(received))  # If you need all the data
-        received_hex = [hex(receive) for receive in received]
-        try:
-            msg_idx = received_hex.index("0x18")
-            if self.print_msg:
-                print(MSG_DICT[received_hex[msg_idx + 2]])
-        except BaseException:
-            if self.print_msg:
-                print(MSG_DICT["0x01"])
-            # self.print_msg = False
-        if self.print_msg:
-            print("message buffer:\n", received_hex)
-            print("message length:\t", data_count)
-
-        if self.ret_hex_int is None:
-            return None
-        elif self.ret_hex_int == "hex":
-            return received_hex
-        elif self.ret_hex_int == "int":
-            return received
-        elif self.ret_hex_int == "both":
-            return received, received_hex
-        return None
-    
-    def write_command_string(self, command):
-        """
-                Writes a command to the device and processes the resulting system message.
-
-                Args:
-                    command (bytearray): Formatted command frame.
-                """
-        self.device.write(command)
-        self.system_message_callback_usb_fs()
 
     def start_measurement(self, spectra, id, measurement_settings, time_of_continuous_measurement = None):
         """
