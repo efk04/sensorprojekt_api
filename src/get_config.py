@@ -6,21 +6,6 @@ user-input class for:
 
 #Imports
 import numpy as np
-import sys
-import os
-
-
-#import Classes
-#helper function to find the classes under the /src path
-current_folder = os.path.dirname(os.path.abspath(__file__))
-main_folder = os.path.abspath(os.path.join(current_folder, "..")) # Anpassen, falls dein Skript noch tiefer liegt
-
-if main_folder not in sys.path:
-    sys.path.append(main_folder)
-
-from src.Commands_ISX3 import ISX3 # Importiere die Klasse ISX3 aus Commands_ISX3.py
-import src.test_check_User_Input as check_user_input
-from config.config_transmitter import ISX3Transmitter 
 
 class get_config:
 
@@ -74,11 +59,10 @@ class get_config:
 
         #Frequenzliste aufbereiten und validieren
         if self.raw_settings["frequency_sweep"]:
-            if len(check_user_input.check_frequency_range(self.raw_settings["start_frequency"], self.raw_settings["end_frequency"])) == 2:
-                if self.raw_settings["scale"] == "lin":
-                    self.raw_settings["frequency_list"] = np.linspace(self.raw_settings["start_frequency"], self.raw_settings["end_frequency"], self.raw_settings["count"]).tolist()
-                elif self.raw_settings["scale"] == "log":
-                    self.raw_settings["frequency_list"] = np.logspace(np.log10(self.raw_settings["start_frequency"]), np.log10(self.raw_settings["end_frequency"]), self.raw_settings["count"]).tolist()
+            if self.raw_settings["scale"] == "lin":
+                self.raw_settings["frequency_list"] = np.linspace(self.raw_settings["start_frequency"], self.raw_settings["end_frequency"], self.raw_settings["count"]).tolist()
+            elif self.raw_settings["scale"] == "log":
+                self.raw_settings["frequency_list"] = np.logspace(np.log10(self.raw_settings["start_frequency"]), np.log10(self.raw_settings["end_frequency"]), self.raw_settings["count"]).tolist()
 
  
 

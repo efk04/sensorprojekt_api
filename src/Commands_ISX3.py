@@ -14,18 +14,6 @@ import os
 import sys
 
 
-#import Classes
-#helper function to find the classes under the /src path
-current_folder = os.path.dirname(os.path.abspath(__file__))
-main_folder = os.path.abspath(os.path.join(current_folder, "..")) # Anpassen, falls dein Skript noch tiefer liegt
-
-if main_folder not in sys.path:
-    sys.path.append(main_folder)
-
-import src.test_check_User_Input as input_user
-#from config.config_transmitter import ISX3Transmitter as ISX3_T
-#from evaluation.ISX3_measurment_test import ISX3MeasurementTest as ISX3_Measurement_Test
-
 MSG_DICT = {
     "0x01": "No message inside the message buffer",
     "0x02": "Timeout: Communication-timeout (less data than expected)",
@@ -177,7 +165,7 @@ class ISX3:
             print("Device not connected.")
             return []
 
-        spectra = input_user.check_input_spectra(spectra)
+        
         #specific tags for the ISX3
         cmd_tag = 0xB8 #cmd_tag for Start Measure
         data_start = bytes([0x01]) + spectra.to_bytes(2, 'big') #starts measurement for number of spectra (if spectra is 0 starts a continuous measurement. Send the command (B8 01 00 B8) to stop the continuous run)
