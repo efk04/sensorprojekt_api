@@ -337,10 +337,6 @@ class ISX3:
         Args:
             timestamp_mode (int): Zeitstempel im Datenframe aktivieren: 0 = Deaktiviert, 1 = ms-Zeitstempel (4 Byte uint32), 2 = µs-Zeitstempel (5 Byte uint56)
             enable_current_range_output (int): Strommessbereich im Rückgabeframe mitsenden (0 = Deaktiviert, 1 = Aktiviert)
-            measurement_mode (int): Measurement mode (1=2-point, 2=4-point, 3=3-point).
-            measurement_channel (str): Measurement channel to use (e.g., "Main Port").
-            current_measurement_range (str): Current measurement range (e.g., "10mA").
-            voltage_measurement_range (str): Voltage measurement range (e.g., "1V").
             #Extension Port Kanal-Auswahl (Befehl 0xB2 / 0xB3). Werte hängen vom angeschlossenen Modul ab (z. B. MuxModule)
             counter_port (int): 
             reference_port (int):
@@ -421,10 +417,15 @@ class ISX3:
         
     def set_frequency_setup(self, current_setup): # config: ISX3DeviceConfig
         """
+        
         Configures the measurement setup parameters for a single frequency point.
 
+
         Args:
-            
+            measurement_mode (int): Measurement mode (1=2-point, 2=4-point, 3=3-point).
+            measurement_channel (str): Measurement channel to use (e.g., "Main Port").
+            current_measurement_range (str): Current measurement range (e.g., "10mA").
+            voltage_measurement_range (str): Voltage measurement range (e.g., "1V").
             frequency(float or str): Frequency point for single frequency measurement
             precision (float): Measurement precision.
             amplitude (str): Signal amplitude.
@@ -452,7 +453,7 @@ class ISX3:
         self._send_command(cmd_tag = cmd_tag, data = data)
 
         
-        # 3. Frontend (0xB0)[cite: 2]
+        #Frontend (0xB0)[cite: 2]
         print("Übertrage Frontend-Settings...")
         # Clear old frontend settings to avoid overflow
         #cmd_tag = 0xB0 # CT -> Set FE Settings
