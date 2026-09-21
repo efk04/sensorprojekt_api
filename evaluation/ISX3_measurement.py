@@ -184,7 +184,7 @@ class Measurement:
         print(f"Creates Measurement-File: {self.filename}")
 
         #get the measurement config as dictionary
-        self.measurements_settings = self.config.get_all_measurement_settings_from_user()
+        self.measurements_settings = self.config.get_test_settings()
         
         #connects device via USB
         self.device.connect_device_fs(settings = self.measurements_settings) 
