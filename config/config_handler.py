@@ -36,7 +36,7 @@ class ExtensionPortConfig:
 @dataclass
 class FrequencySetupConfig:
     mode: str
-    frequency_hz: float
+    frequency_hz: list[float]
     precision: float
     start_frequency_hz: float
     stop_frequency_hz: float
