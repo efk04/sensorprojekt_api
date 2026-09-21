@@ -20,7 +20,7 @@ class get_config:
         #Standard measurement parameters for code testing
         test_settings = {
             "interface_type": 'COM' , #COM -> (Seriell/USB) or TCP -> (Ethernet) (Ethernet connection is not implemented yet)
-            "port": 'COM3', #COM-Port for USB connection ("COM3" on Windows or "/dev/ttyUSB0" on Linux) or IP address for TCP connection
+            "port": 'COM4', #COM-Port for USB connection ("COM3" on Windows or "/dev/ttyUSB0" on Linux) or IP address for TCP connection
             "baudrate": 9600, #e.g. 9600, 115200, etc. (must match the device's settings)
             "timestamp_mode": 1, # Zeitstempel im Datenframe aktivieren: 0 = Deaktiviert, 1 = ms-Zeitstempel (4 Byte uint32), 2 = µs-Zeitstempel (5 Byte uint56)
             "enable_current_range_output": 1, #Strommessbereich im Rückgabeframe mitsenden(0 = Deaktiviert, 1 = Aktiviert)
@@ -36,16 +36,16 @@ class get_config:
             "frequency_list": [1000.0, 2000.0, 5000.0, 10000.0, 50000.0], #frequency_list (list): List of frequencies to measure.
             "start_frequency": 1000.0,     #start_frequency (str): Starting frequency, e.g., "1kHz".
             "end_frequency": 100000.0,    #end_frequency (str): Ending frequency, e.g., "10MHz".
-            "count": 100, #count (int): Number of frequency points.
+            "count": 50, #count (int): Number of frequency points.
             "scale": 'log', #scale (str): Scale type, "log" or "linear".
-            "precision": 1.0, #precision (float): Measurement precision.
+            "precision": 2.0, #precision (float): Measurement precision.
             "amplitude": 0.25, #amplitude (float): Signal amplitude.
             "excitation_type": 1, #excitation_type (int): Type of excitation, "voltage" or "current". 
             "point_delay_us": 0, #Punkt-Verzögerung zwischen Messpunkten in Mikrosekunden (EOP 0x01, uint32)
             "phase_sync": 0, # Phasensynchrones Umschalten (EOP 0x02): 0 = Inaktiv, 1 = Aktiv
             "DC_bias_enabled": 0, # DC-Bias (EOP 0x03): 0 = Inaktiv, 1 = Aktiv
             "bias_voltage": 0.0, # Bias-Spannung in Volt (float, Bereich: -1.0 V bis +1.0 V)
-            "spectra": 5, #number (int) of measurement repetitions in the measurement loop
+            "spectra": 1, #number (int) of measurement repetitions in the measurement loop
             "sync_time_us": 0, #Zeit zwischen zwei Spektrenmessungen in Mikrosekunden (uint32)
             "time_of_continuous_measurement": 30 #time of continuous measurement in seconds, if spectra = 0 (continuous measurement)
         }

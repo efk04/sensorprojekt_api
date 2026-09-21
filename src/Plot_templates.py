@@ -75,6 +75,7 @@ class plot_templates:
             plt.subplots_adjust(right=0.8)
             plt.show()
 
+
     def bode_plot(self, frequency, real, imag):
         """
         Create or update a Bode plot (magnitude + phase) on one figure
@@ -94,10 +95,17 @@ class plot_templates:
 
         #Left Y-Axis: Magnitude |Z| 
         line_mag, = ax1.plot(frequency, impedance, 'o', color='b', label='Magnitude (|Z|)')
+
+        #ax1.set_ylim(0, 2e2)          # fixed range
+
         ax1.set_xlabel('Frequency $f$ (Hz)')
         ax1.set_ylabel(r'Magnitude $|Z|$ ($\Omega$)', color='b')
         ax1.tick_params(axis='y', labelcolor='b', direction='in')
+
         ax1.set_xscale('log')
+
+        ax1.ticklabel_format(axis='y', style='plain', useOffset=False)
+
         ax1.grid(True, which='both', alpha=0.3)
         ax1.tick_params(direction='in', which='both', top=True)
         #ax1.legend(loc='upper left')
