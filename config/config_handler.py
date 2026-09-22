@@ -41,7 +41,7 @@ class FrequencySetupConfig:
     start_frequency_hz: float
     stop_frequency_hz: float
     count: int
-    scale: int
+    scale: str
     excitation_type: int
     amplitude: float
     point_delay_us: int
@@ -49,7 +49,7 @@ class FrequencySetupConfig:
 
 @dataclass
 class DCBiasConfig:
-    enabled: bool
+    dc_bias_enabled: bool
     bias_voltage_v: float
 
 @dataclass
@@ -149,7 +149,7 @@ class ISX3ConfigParser:
             start_frequency_hz=self.parser.getfloat(sec, 'start_frequency_hz', fallback=100.0),
             stop_frequency_hz=self.parser.getfloat(sec, 'stop_frequency_hz', fallback=100000.0),
             count=self.parser.getint(sec, 'count', fallback=10),
-            scale=self.parser.getint(sec, 'scale', fallback=1),
+            scale=self.parser.get(sec, 'scale', fallback='linear'),
             excitation_type=self.parser.getint(sec, 'excitation_type', fallback=1),
             amplitude=self.parser.getfloat(sec, 'amplitude', fallback=0.01),
             point_delay_us=self.parser.getint(sec, 'point_delay_us', fallback=0),
@@ -159,7 +159,7 @@ class ISX3ConfigParser:
     def _parse_dc_bias(self) -> DCBiasConfig:
         sec = 'DCBias'
         return DCBiasConfig(
-            enabled=self.parser.getboolean(sec, 'enabled', fallback=False),
+            dc_bias_enabled=self.parser.getboolean(sec, 'dc_bias_enabled', fallback=0),
             bias_voltage_v=self.parser.getfloat(sec, 'bias_voltage_v', fallback=0.0)
         )
 

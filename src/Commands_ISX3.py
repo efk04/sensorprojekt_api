@@ -46,7 +46,6 @@ class ISX3:
         self.tcp_protocol = None
         self.frequencies = []
         self.frequency_list = []
-        self.tcm = 30 #time of continuous measurement in seconds (default value)
 
     def is_port_available(self, port: str) -> bool:
         """
@@ -147,17 +146,16 @@ class ISX3:
             raise ValueError(f"Unerwarteter Status-Code {hex(status)} empfangen.")
 
 
-    def start_measurement(self, spectra, id, measurement_settings, time_of_continuous_measurement = None):
+    def start_measurement(self, spectra, id, measurement_settings):
         """
         Starts the measurement process on the ISX3 device.
-        when spectra is 0, it starts a continuous measurement for the specified duration.
-        continuous measurement can be stopped by sending the command (B8 01 00 B8).
-       
+        when spectra is 0, it starts a continuous measurement that runs until manually
+        stopped (Ctrl+C), at which point the command (B8 01 00 B8) is sent to stop it.
+
          Args:
             spectra (int): Number of spectra to measure. If 0, starts a continuous measurement.
             id (int): Identifier for the measurement.
-            time_of_continuous_measurement (float, optional): Duration in seconds for continuous measurement. Required if spectra is 0.
-        
+
             returns: results (list): List of tuples containing (frequency_id, real_part, imaginary_part) for each measurement.
         """
 
@@ -173,15 +171,21 @@ class ISX3:
         
 
         if spectra == 0:
-            self.tcm = time_of_continuous_measurement #time of continuous measurement in seconds
             data = data_start
-            print (f"starts continuous measurement for {self.tcm} s.")
+            print("starts continuous measurement. Press Ctrl+C to stop.")
             self.device.write(bytes([cmd_tag, len(data)]) + data + bytes([cmd_tag]))
-            results = self.read_measurement_data(expected_results=expected_results, timeout=10.0)
-            time.sleep(self.tcm)
+            #NOTE: frame capture during continuous mode isn't implemented yet -
+            #read_measurement_data() only supports reading a known, fixed number of frames (spectra > 0),
+            #so no measurement data is collected while waiting here; this loop only controls start/stop timing.
+            results = {"id": [], "real": [], "imag": [], "timestamp": [], "timestamp_unit": [], "current_range": []}
+            try:
+                while True:
+                    time.sleep(0.1) #idle until the user manually stops the continuous measurement
+            except KeyboardInterrupt:
+                pass
             data = data_stop
             self.device.write(bytes([cmd_tag, len(data)]) + data + bytes([cmd_tag]))
-           
+
             print("continuous measurement stopped.")
         else:
             data = data_start
@@ -342,8 +346,8 @@ class ISX3:
             reference_port (int):
             working_sense_port (int):   
             working_port (int):
-            DC_bias_enabled (bool): Whether to enable DC bias.
-            bias_voltage (float): DC bias voltage in volts.
+            dc_bias_enabled (bool): Whether to enable DC bias.
+            bias_voltage_v (float): DC bias voltage in volts.
             sync_time_us (int): Time between two spectrum measurements in microseconds.
         
             Returns:
@@ -355,14 +359,14 @@ class ISX3:
         enable_current_range_output = settings["enable_current_range_output"] #Strommessbereich im          
         measurement_mode=settings["measurement_mode"]
         measurement_channel=settings["measurement_channel"]
-        current_measurement_range=settings["current_measurement_range"]
-        voltage_measurement_range=settings["voltage_measurement_range"]
+        current_range=settings["current_range"]
+        voltage_range=settings["voltage_range"]
         counter_port=settings["counter_port"]
         reference_port=settings["reference_port"]
         working_sense_port=settings["working_sense_port"]
         working_port=settings["working_port"]
-        DC_bias_enabled=settings["DC_bias_enabled"]
-        bias_voltage=settings["bias_voltage"]
+        dc_bias_enabled=settings["dc_bias_enabled"]
+        bias_voltage_v=settings["bias_voltage_v"]
         sync_time_us=settings["sync_time_us"]
 
         print("Übertrage Options...")
@@ -388,8 +392,8 @@ class ISX3:
         fe_payload = struct.pack('>BBBB', 
                                     measurement_mode,
                                     measurement_channel,
-                                    current_measurement_range,
-                                    voltage_measurement_range)
+                                    current_range,
+                                    voltage_range)
         self._send_command(0xB0, fe_payload) # [cite: 2]
         
         # 4. Extension Port (0xB2)[cite: 2]
@@ -405,10 +409,10 @@ class ISX3:
         # 6. DC Bias (0xB6 0x33 / 0x30)[cite: 2]
         print("Übertrage DC Bias...")
         # Value setzen
-        bias_payload = bytes([0x33]) + struct.pack('>f', bias_voltage) #[cite: 2]
+        bias_payload = bytes([0x33]) + struct.pack('>f', bias_voltage_v) #[cite: 2]
         self._send_command(0xB6, bias_payload) #[cite: 2]
         # Aktivieren/Deaktivieren
-        self._send_command(0xB6, bytes([0x30, 1 if DC_bias_enabled else 0])) #[cite: 2]
+        self._send_command(0xB6, bytes([0x30, 1 if dc_bias_enabled else 0])) #[cite: 2]
         
         # 7. Sync Time (0xB9)[cite: 2]
         print("Übertrage Sync Time...")
@@ -437,8 +441,8 @@ class ISX3:
         #get settings from current_setup dictionary
         measurement_mode=current_setup["measurement_mode"]
         measurement_channel=current_setup["measurement_channel"]
-        current_measurement_range=current_setup["current_measurement_range"]
-        voltage_measurement_range=current_setup["voltage_measurement_range"]
+        current_range=current_setup["current_range"]
+        voltage_range=current_setup["voltage_range"]
         frequency = current_setup["frequency"]  #frequency (float): Frequency point for single frequency measurement
         precision = current_setup["precision"] #precision (float): Measurement precision
         amplitude = current_setup["amplitude"] #amplitude (float): Signal amplitude
@@ -463,8 +467,8 @@ class ISX3:
         fe_payload = struct.pack('>BBBB', 
                                     measurement_mode,
                                     measurement_channel,
-                                    current_measurement_range,
-                                    voltage_measurement_range)
+                                    current_range,
+                                    voltage_range)
         self._send_command(0xB0, fe_payload) # [cite: 2]
         
         # Frequency Setup (0xB6)[cite: 2]
