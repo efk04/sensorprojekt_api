@@ -5,6 +5,8 @@ user-input class for:
 """
 
 #Imports
+from unittest import case
+
 import numpy as np
 import os
 import sys
@@ -20,7 +22,7 @@ if main_folder not in sys.path:
 from config.config_handler import ISX3ConfigParser
 
 
-class get_config:
+class GetConfig:
 
 
     def __init__(self):
@@ -54,7 +56,7 @@ class get_config:
             "reference_port": 0, # Werte hängen vom angeschlossenen Modul ab (z. B. MuxModule)
             "working_sense_port": 0,
             "working_port": 0,   
-            "mode": 'sweep', #measurement_mode (str): Whether to perform a frequency sweep (usage of the start, endfrequency, the count and scale option).
+            'mode': 'sweep', #measurement_mode (str): Whether to perform a frequency sweep (usage of the start, endfrequency, the count and scale option).
             "frequency_hz": [1000.0, 2000.0, 5000.0, 10000.0, 50000.0], #frequency_list (list): List of frequencies to measure.
             "start_frequency_hz": 1000.0,     #start_frequency (str): Starting frequency, e.g., "1kHz".
             "end_frequency_hz": 100000.0,    #end_frequency (str): Ending frequency, e.g., "10MHz".
@@ -65,11 +67,10 @@ class get_config:
             "excitation_type": 1, #excitation_type (int): Type of excitation, "voltage" or "current". 
             "point_delay_us": 0, #Punkt-Verzögerung zwischen Messpunkten in Mikrosekunden (EOP 0x01, uint32)
             "phase_sync": 0, # Phasensynchrones Umschalten (EOP 0x02): 0 = Inaktiv, 1 = Aktiv
-            "enabled": 0, # DC-Bias (EOP 0x03): 0 = Inaktiv, 1 = Aktiv
+            "dc_bias_enabled": 0, # DC-Bias (EOP 0x03): 0 = Inaktiv, 1 = Aktiv
             "bias_voltage_v": 0.0, # Bias-Spannung in Volt (float, Bereich: -1.0 V bis +1.0 V)
-            "number_of_spectra": 5, #number (int) of measurement repetitions in the measurement loop
+            "number_of_spectra": 1, #number (int) of measurement repetitions in the measurement loop
             "sync_time_us": 0, #Zeit zwischen zwei Spektrenmessungen in Mikrosekunden (uint32)
-            "time_of_continuous_measurement": 30 #time of continuous measurement in seconds, if spectra = 0 (continuous measurement)
         }
 
         return test_settings
@@ -79,26 +80,26 @@ class get_config:
     def generate_measurement_queue(self):
         #generates a queue of measurement setups (self.measurement_setup_queue) to be executed in the measurement loop
 
-        self.settings = self.get_test_settings()
-        #self.settings = self.get_settings_from_config()
+        #reset queue so repeated calls don't accumulate stale setups from a previous run
+        self.measurement_setup_queue = []
 
-        
-        #Frequenzliste aufbereiten und validieren
-        if self.settings["mode"] == "sweep":
-            if self.settings["scale"] == "lin":
-                self.settings["frequency_hz"] = np.linspace(self.settings["start_frequency_hz"], self.settings["end_frequency_hz"], self.settings["count"]).tolist()
-            elif self.settings["scale"] == "log":
-                self.settings["frequency_hz"] = np.logspace(np.log10(self.settings["start_frequency_hz"]), np.log10(self.settings["end_frequency_hz"]), self.settings["count"]).tolist()
+        #self.settings = self.get_test_settings()
+        self.settings = self.get_settings_from_config()
 
-        #bei Einzelfrequenz Liste erstellen
-        #if frequency_ :
+        frequency_queue_hz = [self.settings["frequency_hz"]]
+        match self.settings["mode"]:
+            case "sweep":
+                if self.settings["scale"] == "linear":
+                    frequency_queue_hz = np.linspace(self.settings["start_frequency_hz"], self.settings["stop_frequency_hz"], self.settings["count"]).tolist()
+                elif self.settings["scale"] == "logarithmic":
+                    frequency_queue_hz = np.logspace(np.log10(self.settings["start_frequency_hz"]), np.log10(self.settings["stop_frequency_hz"]), self.settings["count"]).tolist()
+            case "single":
+                frequency_queue_hz = [self.settings["frequency_hz"]]
 
 
-        for index, freq in enumerate(self.settings["frequency_hz"]): 
+        for index, freq in enumerate(frequency_queue_hz): 
             #first setup id is 1
             setup_id = index + 1
-
-  
 
             single_setup = {
                 "id": setup_id,
@@ -106,16 +107,16 @@ class get_config:
                 "enable_current_range_output": self.settings["enable_current_range_output"], #Strommessbereich im Rückgabeframe mitsenden(0 = Deaktiviert, 1 = Aktiviert)
                 "measurement_mode":self.settings["measurement_mode"], #measurement_mode (int): Measurement mode (1=2-point, 2=4-point, 3=3-point)
                 "measurement_channel":self.settings["measurement_channel"], #measurement_channel (str): Measurement channel to use (e.g., "Main Port")
-                "current_measurement_range":self.settings["current_range"], #current_measurement_range (str): Current measurement range (e.g., "10mA")
-                "voltage_measurement_range":self.settings["voltage_range"], #voltage_measurement_range (str): Voltage measurement range (e.g., "1V")
+                "current_range":self.settings["current_range"], #current_measurement_range (str): Current measurement range (e.g., "10mA")
+                "voltage_range":self.settings["voltage_range"], #voltage_measurement_range (str): Voltage measurement range (e.g., "1V")
                 "counter_port": self.settings["counter_port"],
                 "reference_port": self.settings["reference_port"],
                 "working_sense_port": self.settings["working_sense_port"],
                 "working_port": self.settings["working_port"],
-                "frequency_sweep":self.settings["mode"], #frequency_sweep (bool): Whether to perform a frequency sweep (True/False).
+                "mode":self.settings["mode"], #frequency_sweep (str): Measurement mode, "sweep" or "single" (see FrequencySetupConfig.mode).
                 "frequency":freq, #frequency of measurment
                 "start_frequency":self.settings["start_frequency_hz"],   #start_frequency (str): Starting frequency, e.g., "1kHz"
-                "end_frequency":self.settings["end_frequency_hz"], #end_frequency (str): Ending frequency, e.g., "10MHz"
+                "stop_frequency_hz":self.settings["stop_frequency_hz"], #end_frequency (str): Ending frequency, e.g., "10MHz"
                 "count":self.settings["count"],  #count (int): Number of frequency points
                 "scale":self.settings["scale"], #scale (str): Scale type, 1 -> log or 0 -> linear
                 "precision":self.settings["precision"], #precision (float): Measurement precision.
@@ -123,12 +124,10 @@ class get_config:
                 "excitation_type":self.settings["excitation_type"], #excitation_type (str): Type of excitation, "voltage" or "current".
                 "point_delay_us": self.settings["point_delay_us"],
                 "phase_sync": self.settings["phase_sync"],
-                "DC_bias_enabled": self.settings["enabled"],
-                "bias_voltage": self.settings["bias_voltage_v"],
-                "spectra": self.settings["number_of_spectra"], #number (int) of measurement repetitions in the measurement loop
-                "sync_time_us": self.settings["sync_time_us"],
-                "time_of_continuous_measurement": self.settings["time_of_continuous_measurement"]
-
+                "dc_bias_enabled": self.settings["dc_bias_enabled"],
+                "bias_voltage_v": self.settings["bias_voltage_v"],
+                "number_of_spectra": self.settings["number_of_spectra"], #number (int) of measurement repetitions in the measurement loop
+                "sync_time_us": self.settings["sync_time_us"]
             }
 
             #includes setup in queue
@@ -136,5 +135,7 @@ class get_config:
         return self.measurement_setup_queue
 
 
-ISX3Konfig = get_config()
+
+ISX3Konfig = GetConfig()
 ISX3Konfig.get_settings_from_config()
+ISX3Konfig.generate_measurement_queue()

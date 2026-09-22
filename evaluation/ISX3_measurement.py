@@ -28,7 +28,7 @@ if main_folder not in sys.path:
 
 from src.Commands_ISX3 import ISX3 
 from src.Plot_templates import plot_templates
-from src.get_config import get_config
+from src.get_config import GetConfig
 
 class Measurement:
 
@@ -53,7 +53,7 @@ class Measurement:
         
         #include other librarys
         self.device = ISX3()
-        self.config = get_config()
+        self.config = GetConfig()
         self.plttemp = plot_templates()
 
 
@@ -66,21 +66,19 @@ class Measurement:
     def start_measurement(self, current_setup, measurement_settings):
         #start measurment via other library
         #give back data to self.measurment_data
-        spectra = current_setup["spectra"] #spectra counts the measurement repetitions
+        number_of_spectra = current_setup["number_of_spectra"] #spectra counts the measurement repetitions
         id = current_setup["id"]
-        tcm = current_setup["time_of_continuous_measurement"] #time of continuous measurement in seconds, if spectra = 0 (continuous measurement)
-        
 
         if not self.device:
             print("Device not connected.")
             return []
 
-        expected_results = spectra * 1
+        expected_results = number_of_spectra * 1
 
-        print(f"Starts the measuring for {spectra} Cycles...")
+        print(f"Starts the measuring for {number_of_spectra} Cycles...")
 
         #starts the measuring and Reads the Data
-        results = self.device.start_measurement(spectra=spectra, id = id, time_of_continuous_measurement=tcm, measurement_settings = measurement_settings) #time_of_continuous_measurement in seconds, if spectra = 0 (continuous measurement)
+        results = self.device.start_measurement(spectra=number_of_spectra, id = id, measurement_settings = measurement_settings)
 
         if results is None:
             print (f"No Results for measurement Nr.{id}.")
@@ -173,9 +171,6 @@ class Measurement:
         #3. start measurment and read measurment_data
         #4. update and scale live plot 
         #5. save measurment data in H5 format
-
-
-        
 
         #creates a new H5 file for the whole measurement campaign, and saves the data in H5 format under "measurements"
         current_date = datetime.now().strftime("%Y%m%d-%H%M%S")
