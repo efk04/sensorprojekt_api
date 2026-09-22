@@ -334,7 +334,7 @@ class ISX3:
         
         return ip_str
     
-    def set_options_and_fe_settings(self, settings): # config: ISX3DeviceConfig
+    def set_options(self, settings): # config: ISX3DeviceConfig
         """
         Configures the frontend settings for the measurement.
 
@@ -382,21 +382,9 @@ class ISX3:
         # Enable/Disable Current Range
         self._send_command(0x97, bytes([0x04, 1 if enable_current_range_output else 0])) # [cite: 2]
 
-        # 3. Frontend (0xB0)[cite: 2]
-        print("Übertrage Frontend-Settings...")
-        # Clear old frontend settings to avoid overflow
-        cmd_tag = 0xB0 # CT -> Set FE Settings
-        data = bytes([0xFF, 0xFF, 0xFF])  
-        self._send_command(cmd_tag = cmd_tag, data = data)
-        # Sende neue Frontend-Settings (Mode, Channel, C-Range, V-Range)
-        fe_payload = struct.pack('>BBBB', 
-                                    measurement_mode,
-                                    measurement_channel,
-                                    current_range,
-                                    voltage_range)
-        self._send_command(0xB0, fe_payload) # [cite: 2]
         
-        # 4. Extension Port (0xB2)[cite: 2]
+        
+        # 3. Extension Port (0xB2)[cite: 2] - not used yet
         """
         print("Übertrage Extension Port-Settings...")
         ext_payload = struct.pack('>BBBB',
@@ -406,7 +394,7 @@ class ISX3:
                                     working_port)
         self._send_command(0xB2, ext_payload) #[cite: 2]
         """
-        # 6. DC Bias (0xB6 0x33 / 0x30)[cite: 2]
+        # 4. DC Bias (0xB6 0x33 / 0x30)[cite: 2]
         print("Übertrage DC Bias...")
         # Value setzen
         bias_payload = bytes([0x33]) + struct.pack('>f', bias_voltage_v) #[cite: 2]
@@ -414,7 +402,7 @@ class ISX3:
         # Aktivieren/Deaktivieren
         self._send_command(0xB6, bytes([0x30, 1 if dc_bias_enabled else 0])) #[cite: 2]
         
-        # 7. Sync Time (0xB9)[cite: 2]
+        # 5. Sync Time (0xB9)[cite: 2]
         print("Übertrage Sync Time...")
         sync_payload = struct.pack('>I', sync_time_us) #[cite: 2]
         self._send_command(0xB9, sync_payload) #[cite: 2]
@@ -457,7 +445,7 @@ class ISX3:
         self._send_command(cmd_tag = cmd_tag, data = data)
 
         
-        #Frontend (0xB0)[cite: 2]
+        #1 Frontend (0xB0)[cite: 2]
         print("Übertrage Frontend-Settings...")
         # Clear old frontend settings to avoid overflow
         #cmd_tag = 0xB0 # CT -> Set FE Settings
@@ -471,7 +459,7 @@ class ISX3:
                                     voltage_range)
         self._send_command(0xB0, fe_payload) # [cite: 2]
         
-        # Frequency Setup (0xB6)[cite: 2]
+        #2 Frequency Setup (0xB6)[cite: 2]
         print("Übertrage Frequency-Setup...")
         # Init / Clear current setup
         

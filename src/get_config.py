@@ -38,7 +38,7 @@ class GetConfig:
         return config_settings
         
     
-    def get_test_settings(self):
+    def get_temp_test_settings(self):
         #gets measurement settings from user
 
         #Standard measurement parameters for code testing
@@ -66,8 +66,8 @@ class GetConfig:
             "amplitude": 0.25, #amplitude (float): Signal amplitude.
             "excitation_type": 1, #excitation_type (int): Type of excitation, "voltage" or "current". 
             "point_delay_us": 0, #Punkt-Verzögerung zwischen Messpunkten in Mikrosekunden (EOP 0x01, uint32)
-            "phase_sync": 0, # Phasensynchrones Umschalten (EOP 0x02): 0 = Inaktiv, 1 = Aktiv
-            "dc_bias_enabled": 0, # DC-Bias (EOP 0x03): 0 = Inaktiv, 1 = Aktiv
+            "phase_sync": False, # Phasensynchrones Umschalten (EOP 0x02): False = Inaktiv, True = Aktiv
+            "dc_bias_enabled": False, # DC-Bias (EOP 0x03): False = Inaktiv, True = Aktiv
             "bias_voltage_v": 0.0, # Bias-Spannung in Volt (float, Bereich: -1.0 V bis +1.0 V)
             "number_of_spectra": 1, #number (int) of measurement repetitions in the measurement loop
             "sync_time_us": 0, #Zeit zwischen zwei Spektrenmessungen in Mikrosekunden (uint32)
@@ -83,7 +83,7 @@ class GetConfig:
         #reset queue so repeated calls don't accumulate stale setups from a previous run
         self.measurement_setup_queue = []
 
-        #self.settings = self.get_test_settings()
+        #self.settings = self.get_temp_test_settings() #uses temp test_settings
         self.settings = self.get_settings_from_config()
 
         frequency_queue_hz = [self.settings["frequency_hz"]]
@@ -96,7 +96,7 @@ class GetConfig:
             case "single":
                 frequency_queue_hz = [self.settings["frequency_hz"]]
 
-
+        
         for index, freq in enumerate(frequency_queue_hz): 
             #first setup id is 1
             setup_id = index + 1
@@ -104,7 +104,7 @@ class GetConfig:
             single_setup = {
                 "id": setup_id,
                 "timestamp_mode": self.settings["timestamp_mode"], # Zeitstempel im Datenframe aktivieren: 0 = Deaktiviert, 1 = ms-Zeitstempel (4 Byte uint32), 2 = µs-Zeitstempel (5 Byte uint56)
-                "enable_current_range_output": self.settings["enable_current_range_output"], #Strommessbereich im Rückgabeframe mitsenden(0 = Deaktiviert, 1 = Aktiviert)
+                "enable_current_range_output": int(self.settings["enable_current_range_output"]), #Strommessbereich im Rückgabeframe mitsenden(0 = Deaktiviert, 1 = Aktiviert)
                 "measurement_mode":self.settings["measurement_mode"], #measurement_mode (int): Measurement mode (1=2-point, 2=4-point, 3=3-point)
                 "measurement_channel":self.settings["measurement_channel"], #measurement_channel (str): Measurement channel to use (e.g., "Main Port")
                 "current_range":self.settings["current_range"], #current_measurement_range (str): Current measurement range (e.g., "10mA")
@@ -115,7 +115,7 @@ class GetConfig:
                 "working_port": self.settings["working_port"],
                 "mode":self.settings["mode"], #frequency_sweep (str): Measurement mode, "sweep" or "single" (see FrequencySetupConfig.mode).
                 "frequency":freq, #frequency of measurment
-                "start_frequency":self.settings["start_frequency_hz"],   #start_frequency (str): Starting frequency, e.g., "1kHz"
+                "start_frequency_hz":self.settings["start_frequency_hz"],   #start_frequency (str): Starting frequency, e.g., "1kHz"
                 "stop_frequency_hz":self.settings["stop_frequency_hz"], #end_frequency (str): Ending frequency, e.g., "10MHz"
                 "count":self.settings["count"],  #count (int): Number of frequency points
                 "scale":self.settings["scale"], #scale (str): Scale type, 1 -> log or 0 -> linear
@@ -123,11 +123,13 @@ class GetConfig:
                 "amplitude":self.settings["amplitude"], #amplitude (str): Signal amplitude.
                 "excitation_type":self.settings["excitation_type"], #excitation_type (str): Type of excitation, "voltage" or "current".
                 "point_delay_us": self.settings["point_delay_us"],
-                "phase_sync": self.settings["phase_sync"],
-                "dc_bias_enabled": self.settings["dc_bias_enabled"],
-                "bias_voltage_v": self.settings["bias_voltage_v"],
+                "phase_sync": int(self.settings["phase_sync"]), #Phasensynchrones Umschalten (EOP 0x02): 0 = Inaktiv, 1 = Aktiv
+                "dc_bias_enabled": int(self.settings["dc_bias_enabled"]), # DC-Bias (EOP 0x03): 0 = Inaktiv, 1 = Aktiv
+                "bias_voltage_v": self.settings["bias_voltage_v"], # Bias-Spannung in Volt (float, Bereich: -1.0 V bis +1.0 V)
                 "number_of_spectra": self.settings["number_of_spectra"], #number (int) of measurement repetitions in the measurement loop
-                "sync_time_us": self.settings["sync_time_us"]
+                "sync_time_us": self.settings["sync_time_us"], #Zeit zwischen zwei Spektrenmessungen in Mikrosekunden (uint32)
+                "time_of_continuous_measurement": self.settings["time_of_continuous_measurement"] #Zeitraum (in s) in der die Messung mit diesen Einstellungen wiederholt wird (0 -> Einzelmessung)
+                
             }
 
             #includes setup in queue

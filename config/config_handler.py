@@ -61,6 +61,11 @@ class MeasurementConfig:
     number_of_spectra: int
 
 @dataclass
+class ContinuousMeasurementConfig:
+    time_of_continuous_measurement: int
+    
+
+@dataclass
 class ISX3DeviceConfig:
     connection: ConnectionConfig
     options: OptionsConfig
@@ -70,6 +75,7 @@ class ISX3DeviceConfig:
     dc_bias: DCBiasConfig
     sync_time: SyncTimeConfig
     measurement: MeasurementConfig
+    continuous_measurement: ContinuousMeasurementConfig
 
 
 # ==============================================================================
@@ -101,7 +107,8 @@ class ISX3ConfigParser:
             frequency_setup=self._parse_frequency_setup(),
             dc_bias=self._parse_dc_bias(),
             sync_time=self._parse_sync_time(),
-            measurement=self._parse_measurement()
+            measurement=self._parse_measurement(),
+            continuous_measurement=self._parse_continuous_measurement()
         )
 
     def _parse_connection(self) -> ConnectionConfig:
@@ -173,6 +180,13 @@ class ISX3ConfigParser:
         sec = 'Measurement'
         return MeasurementConfig(
             number_of_spectra=self.parser.getint(sec, 'number_of_spectra', fallback=1)
+        )
+
+    #Geräteunspezifische Messeinstellungen
+    def _parse_continuous_measurement(self) -> ContinuousMeasurementConfig:
+        sec = 'ContinuousMeasurement'
+        return ContinuousMeasurementConfig(
+            time_of_continuous_measurement = self.parser.getint(sec, 'time_of_continuous_measurement',fallback=0)
         )
 
     def parse_as_dict(self) -> dict:

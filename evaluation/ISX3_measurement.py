@@ -179,7 +179,7 @@ class Measurement:
         print(f"Creates Measurement-File: {self.filename}")
 
         #get the measurement config as dictionary
-        self.measurements_settings = self.config.get_test_settings()
+        self.measurements_settings = self.config.get_settings_from_config()
         
         #connects device via USB
         self.device.connect_device_fs(settings = self.measurements_settings) 
@@ -188,15 +188,19 @@ class Measurement:
         self.safe_measurement_settings(settings = self.measurements_settings)
         
         #load measurment settings (Options, frontend settings, Extension port settings, DC bias, SyncTime ) in device 
-        self.device.set_options_and_fe_settings(settings=self.measurements_settings)
+        self.device.set_options(settings=self.measurements_settings)
 
 
         #creats a queue of all measurement setups to be executed in the measurement loop
         measurement_setup_queue = self.config.generate_measurement_queue()
-       
+        measurement_start = time.time()
         
         #Measurement loop for all frequency setups in measurement_setup_queue
         while measurement_setup_queue:
+            #if "time_of_continuous_measurement" > 0 run continuous measurement cycles
+            if self.measurement_settings["time_of_continuous_measurement"] > 0 and (time.time() - measurement_start) >= self.measurement_settings["time_of_continuous_measurement"]:
+                break
+
             #get next measurement setup from measurement_setup_queue
             current_setup = measurement_setup_queue.pop(0)
             print(f'\n----- Starts Measurement with ID: {current_setup["id"]} ---') #id, bzw anderen Zähler hinzufügen, um überblick über ausgeführte Messungen zu behalten
@@ -214,7 +218,6 @@ class Measurement:
             #save measurment data in H5 format
             self.safe_measurment(results = results, current_setup=current_setup)
 
-            
 
         print('\n----- finished all measurements -----')
 
