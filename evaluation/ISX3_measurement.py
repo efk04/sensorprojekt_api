@@ -46,7 +46,7 @@ class Measurement:
 
 
         self.h5_filename = '' #filename of the h5-file
-        self.measurements_settings = {} # dictonary for all measurements settings from user
+        self.measurement_settings = {} # dictonary for all measurements settings from user
         self.measurement_setup_queue = []  # List to hold measurement setups
         self.results = []  # List to hold measurement data
         
@@ -101,7 +101,7 @@ class Measurement:
 
         group_name = "1-Measurement_Settings"
 
-        #gets measurements_settings dictionary from user and writes it as a string in a h5 file
+        #gets measurement_settings dictionary from user and writes it as a string in a h5 file
         measurement_settings = settings
         measurement_settings_json = json.dumps(measurement_settings)
         
@@ -179,44 +179,50 @@ class Measurement:
         print(f"Creates Measurement-File: {self.filename}")
 
         #get the measurement config as dictionary
-        self.measurements_settings = self.config.get_settings_from_config()
+        self.measurement_settings = self.config.get_settings_from_config()
         
         #connects device via USB
-        self.device.connect_device_fs(settings = self.measurements_settings) 
+        self.device.connect_device_fs(settings = self.measurement_settings) 
 
         #saves the measurement settings as a group in the h5-file
-        self.safe_measurement_settings(settings = self.measurements_settings)
+        self.safe_measurement_settings(settings = self.measurement_settings)
         
         #load measurment settings (Options, frontend settings, Extension port settings, DC bias, SyncTime ) in device 
-        self.device.set_options(settings=self.measurements_settings)
+        self.device.set_options(settings=self.measurement_settings)
 
 
         #creats a queue of all measurement setups to be executed in the measurement loop
         measurement_setup_queue = self.config.generate_measurement_queue()
+
         measurement_start = time.time()
-        
-        #Measurement loop for all frequency setups in measurement_setup_queue
-        while measurement_setup_queue:
 
-            #get next measurement setup from measurement_setup_queue
-            current_setup = measurement_setup_queue.pop(0)
-            print(f'\n----- Starts Measurement with ID: {current_setup["id"]} ---') #id, bzw anderen Zähler hinzufügen, um überblick über ausgeführte Messungen zu behalten
-            print(current_setup)
-            #load frequnecy setup from measurement_setup_queue in device
-            self.device.set_frequency_setup(current_setup=current_setup)
+        while True:
+            #Measurement loop for all frequency setups in measurement_setup_queue
+            while measurement_setup_queue:
 
-            #start measurment and collect data
-            results = self.start_measurement(current_setup = current_setup, measurement_settings =  self.measurements_settings)
-            print(results)
-            
-            #update live plot with new data
-            self.update_live_plot(results = results, current_setup=current_setup)
+                #get next measurement setup from measurement_setup_queue
+                current_setup = measurement_setup_queue.pop(0)
+                print(f'\n----- Starts Measurement with ID: {current_setup["id"]} ---') #id, bzw anderen Zähler hinzufügen, um überblick über ausgeführte Messungen zu behalten
+                print(current_setup)
+                #load frequnecy setup from measurement_setup_queue in device
+                self.device.set_frequency_setup(current_setup=current_setup)
 
-            #save measurment data in H5 format
-            self.safe_measurment(results = results, current_setup=current_setup)
+                #start measurment and collect data
+                results = self.start_measurement(current_setup = current_setup, measurement_settings =  self.measurement_settings)
+                print(results)
+                
+                #update live plot with new data
+                self.update_live_plot(results = results, current_setup=current_setup)
 
-            #if "time_of_continuous_measurement" > 0 run continuous measurement cycles
-            if self.measurement_settings["time_of_continuous_measurement"] > 0 and (time.time() - measurement_start) >= self.measurement_settings["time_of_continuous_measurement"]:
+                #save measurment data in H5 format
+                self.safe_measurment(results = results, current_setup=current_setup)
+
+                #if "time_of_continuous_measurement" > 0 run continuous measurement cycles
+                if self.measurement_settings["time_of_continuous_measurement"] > 0 and (time.time() - measurement_start) >= self.measurement_settings["time_of_continuous_measurement"]:
+                    break
+
+            #if "time_of_continuous_measurement" = 0 run only one measurement cycle
+            if self.measurement_settings["time_of_continuous_measurement"] == 0:
                 break
 
 
