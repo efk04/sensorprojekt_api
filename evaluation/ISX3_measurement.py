@@ -197,9 +197,6 @@ class Measurement:
         
         #Measurement loop for all frequency setups in measurement_setup_queue
         while measurement_setup_queue:
-            #if "time_of_continuous_measurement" > 0 run continuous measurement cycles
-            if self.measurement_settings["time_of_continuous_measurement"] > 0 and (time.time() - measurement_start) >= self.measurement_settings["time_of_continuous_measurement"]:
-                break
 
             #get next measurement setup from measurement_setup_queue
             current_setup = measurement_setup_queue.pop(0)
@@ -217,6 +214,11 @@ class Measurement:
 
             #save measurment data in H5 format
             self.safe_measurment(results = results, current_setup=current_setup)
+
+            #if "time_of_continuous_measurement" > 0 run continuous measurement cycles
+            if self.measurement_settings["time_of_continuous_measurement"] > 0 and (time.time() - measurement_start) >= self.measurement_settings["time_of_continuous_measurement"]:
+                break
+
 
 
         print('\n----- finished all measurements -----')
