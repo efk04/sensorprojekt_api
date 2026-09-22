@@ -28,7 +28,7 @@ if main_folder not in sys.path:
 
 from src.Commands_ISX3 import ISX3 
 from src.Plot_templates import plot_templates
-from src.get_config import get_config
+from src.get_config import GetConfig
 
 class Measurement:
 
@@ -53,7 +53,7 @@ class Measurement:
         
         #include other librarys
         self.device = ISX3()
-        self.config = get_config()
+        self.config = GetConfig()
         self.plttemp = plot_templates()
 
 

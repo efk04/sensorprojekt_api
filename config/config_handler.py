@@ -144,7 +144,7 @@ class ISX3ConfigParser:
         sec = 'FrequencySetup'
         return FrequencySetupConfig(
             mode=self.parser.get(sec, 'mode', fallback='sweep'),
-            frequency_hz=self.parser.getfloat(sec, 'frequency_hz', fallback=1000.0).split(','),
+            frequency_hz=[float(f) for f in self.parser.get(sec, 'frequency_hz', fallback='1000.0').split(',')],
             precision=self.parser.getfloat(sec, 'precision', fallback=1.0),
             start_frequency_hz=self.parser.getfloat(sec, 'start_frequency_hz', fallback=100.0),
             stop_frequency_hz=self.parser.getfloat(sec, 'stop_frequency_hz', fallback=100000.0),

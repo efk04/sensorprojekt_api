@@ -20,7 +20,7 @@ if main_folder not in sys.path:
 from config.config_handler import ISX3ConfigParser
 
 
-class get_config:
+class GetConfig:
 
 
     def __init__(self):
@@ -51,19 +51,11 @@ class get_config:
             "reference_port": 0, # Werte hängen vom angeschlossenen Modul ab (z. B. MuxModule)
             "working_sense_port": 0,
             "working_port": 0,   
-<<<<<<< Updated upstream
-            "frequency_sweep": True, #frequency_sweep (bool): Whether to perform a frequency sweep (usage of the start, endfrequency, the count and scale option).
-            "frequency_list": [1000.0, 2000.0, 5000.0, 10000.0, 50000.0], #frequency_list (list): List of frequencies to measure.
-            "start_frequency": 1000.0,     #start_frequency (str): Starting frequency, e.g., "1kHz".
-            "end_frequency": 100000.0,    #end_frequency (str): Ending frequency, e.g., "10MHz".
-            "count": 50, #count (int): Number of frequency points.
-=======
             'mode': 'sweep', #measurement_mode (str): Whether to perform a frequency sweep (usage of the start, endfrequency, the count and scale option).
             "frequency_hz": [1000.0, 2000.0, 5000.0, 10000.0, 50000.0], #frequency_list (list): List of frequencies to measure.
             "start_frequency_hz": 1000.0,     #start_frequency (str): Starting frequency, e.g., "1kHz".
             "end_frequency_hz": 100000.0,    #end_frequency (str): Ending frequency, e.g., "10MHz".
             "count": 100, #count (int): Number of frequency points.
->>>>>>> Stashed changes
             "scale": 'log', #scale (str): Scale type, "log" or "linear".
             "precision": 2.0, #precision (float): Measurement precision.
             "amplitude": 0.25, #amplitude (float): Signal amplitude.
@@ -84,8 +76,11 @@ class get_config:
     def generate_measurement_queue(self):
         #generates a queue of measurement setups (self.measurement_setup_queue) to be executed in the measurement loop
 
-        self.settings = self.get_test_settings()
-        #self.settings = self.get_settings_from_config()
+        #reset queue so repeated calls don't accumulate stale setups from a previous run
+        self.measurement_setup_queue = []
+
+        #self.settings = self.get_test_settings()
+        self.settings = self.get_settings_from_config()
 
         
         #Frequenzliste aufbereiten und validieren
@@ -117,7 +112,7 @@ class get_config:
                 "reference_port": self.settings["reference_port"],
                 "working_sense_port": self.settings["working_sense_port"],
                 "working_port": self.settings["working_port"],
-                "frequency_sweep":self.settings["mode"], #frequency_sweep (bool): Whether to perform a frequency sweep (True/False).
+                "frequency_sweep":self.settings["mode"], #frequency_sweep (str): Measurement mode, "sweep" or "single" (see FrequencySetupConfig.mode).
                 "frequency":freq, #frequency of measurment
                 "start_frequency":self.settings["start_frequency_hz"],   #start_frequency (str): Starting frequency, e.g., "1kHz"
                 "end_frequency":self.settings["end_frequency_hz"], #end_frequency (str): Ending frequency, e.g., "10MHz"
@@ -141,5 +136,6 @@ class get_config:
         return self.measurement_setup_queue
 
 
-ISX3Konfig = get_config()
+
+ISX3Konfig = GetConfig()
 ISX3Konfig.get_settings_from_config()
