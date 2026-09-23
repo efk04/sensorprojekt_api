@@ -14,7 +14,7 @@ import json
 
 from commands import ISX3 
 from plot_templates import PlotTemplates
-from config_handler import ConfigBuilder
+from config_handler import ConfigBuilder, ConfigParser
 
 class Measurement:
 
@@ -32,6 +32,7 @@ class Measurement:
 
 
         self.h5_filename = '' #filename of the h5-file
+        self.plot_type = ''
         self.measurement_settings = {} # dictonary for all measurements settings from user
         self.measurement_setup_queue = []  # List to hold measurement setups
         self.results = []  # List to hold measurement data
@@ -141,28 +142,35 @@ class Measurement:
         real = res["real"]
         imag = res["imag"]
 
-        #plots the impedance_frequency plot
-        #only one plot can be shown in the liveplot! ->Auswahlfunktion für plotformat erstellen?
-        #self.plttemp.impedance_frequency( frequency = frequency, freq_id =freq_id,real = real,imag = imag)
-        #self.plttemp.nyquist(real = real, imag = imag) 
-        self.plttemp.bode(frequency = frequency,real = real,imag = imag)
+        match self.plot_type:
+            case "impedance_frequency":
+                self.plttemp.impedance_frequency(frequency=frequency, freq_id=res["id"], real=real, imag=imag)
+            case "nyquist":
+                self.plttemp.nyquist(real=real, imag=imag)
+            case _:   # "bode" und alle unbekannten Werte
+                self.plttemp.bode(frequency=frequency, real=real, imag=imag)
+
         plt.pause(0.1)#short break
 
     #Methode for main loop
     def measurement(self):
-        #0. create H5 file for the entire measurement campaign, with timestamp in filename
-        #1. connect to device (only once at the beginning of the measurment)
-        #2. get all measurement settings out of measurment_settings_file (contains frequency list for the measurment loop)
-        #2.1 load measurement settings for given frequeny in device via other library
-        #3. start measurment and read measurment_data
-        #4. update and scale live plot 
-        #5. save measurment data in H5 format
+        # 0 create H5 file for the entire measurement campaign, with timestamp in filename
+        # 1 connect to device (only once at the beginning of the measurment)
+        # 2 get api settings from config file and set plot type
+        # 3 get all measurement settings out of measurment_settings_file (contains frequency list for the measurment loop)
+        # 4 load measurement settings for given frequeny in device via other library
+        # 5 start measurment and read measurment_data
+        # 6 update and scale live plot 
+        # 7 save measurment data in H5 format
 
         #creates a new H5 file for the whole measurement campaign, and saves the data in H5 format under "measurements"
         current_date = datetime.now().strftime("%Y%m%d-%H%M%S")
         self.filename = f"measurement_results_{current_date}.h5"
         h5_file = h5py.File(f"measurements/{self.filename}", 'w')
         print(f"Creates Measurement-File: {self.filename}")
+
+        # 2
+        self.plot_type = self.ConfigParser._pa
 
         #get the measurement config as dictionary
         self.measurement_settings = self.config.get_settings_from_config()
