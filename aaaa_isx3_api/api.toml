@@ -1,0 +1,16 @@
+[project]
+name = "isx3_api"
+version = "0.1.0"
+authors = [
+  { name="Martin Engelke", email="martin.engelke@stud.htwk-leipzig.de" },
+  { name="Fedor Keil", email="fedor.keil@stud.htwk-leipzig.de" },
+]
+description = "A API package for using the ISX3 measurement device"
+readme = "README.md"
+requires-python = ">=3.14"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: Windows",
+]
+license = "MIT"
+license-files = ["LICENSE"]

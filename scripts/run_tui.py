@@ -12,7 +12,7 @@ if str(MAIN_FOLDER) not in sys.path:
 import serial
 import matplotlib.pyplot as plt
 
-from config.config_handler import ISX3ConfigParser
+from zz_sonstige.config.config_handler import ISX3ConfigParser
 from config.config_transmitter import ISX3Transmitter
 
 CONFIG_PATH = "config/config.ini"
