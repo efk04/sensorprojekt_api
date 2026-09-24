@@ -215,12 +215,23 @@ class ConfigParser:
         return flat_dict
 
 
+    def parse_api_settings(self) -> ApiSettingsConfig:
+        """Liest nur die API-Einstellungen (nicht Teil der Gerätekonfiguration)."""
+        if not self.parser.read(self.file_path, encoding='utf-8'):
+            raise FileNotFoundError(f"Die Konfigurationsdatei '{self.file_path}' konnte nicht gefunden/gelesen werden.")
+
+        sec = 'ApiSettings'
+        return ApiSettingsConfig(
+            plot_type=self.parser.get(sec, 'plot_type', fallback='bode').strip().lower()
+        )
+
+
 class ConfigBuilder:
 
-    def __init__(self):
+    def __init__(self, config_path: str = "config/config.ini"):
         self.measurement_setup_queue = []  #list of dictionarys to hold measurement setups
         self.settings = {} # empty dictionary to hold measurement settings from user
-        self.ISX3config = ConfigParser("config/config.ini")
+        self.ISX3config = ConfigParser(config_path)
 
     def get_settings_from_config(self):
         print("davor")
@@ -330,83 +341,23 @@ class ConfigBuilder:
 
 
 
-def extract_config_from_hdf(hdf_file_path: str | None = None):
+def select_config_file() -> str | None:
     """
-    Extracts the configuration from an HDF5 file and returns it as a new config.ini file.
+    Opens a file dialog to select the config.ini file for a measurement.
 
-    :param hdf_file_path: Path to the HDF5 file. If None, a file dialog asks for it.
-    :return: path of the written config.ini file (None if the user cancelled a dialog).
+    :return: path of the selected config file (None if the user cancelled the dialog).
     """
-    import json
-    import h5py
-    from dataclasses import fields
     from tkinter import Tk, filedialog
 
-    #hidden tkinter window, only needed as parent for the file dialogs
+    #hidden tkinter window, only needed as parent for the file dialog
     root = Tk()
     root.withdraw()
     root.attributes('-topmost', True)
 
-    #ask the user for the HDF5 file if no path was given
-    if hdf_file_path is None:
-        hdf_file_path = filedialog.askopenfilename(
-            title="Select measurement HDF5 file",
-            filetypes=[("HDF5 files", "*.h5 *.hdf5"), ("All files", "*.*")],
-        )
-        if not hdf_file_path:
-            root.destroy()
-            print("No HDF5 file selected, nothing extracted.")
-            return None
-
-    #read the flat settings dictionary that Measurement.safe_measurement_settings() stored as JSON
-    with h5py.File(hdf_file_path, 'r') as hdf_file:
-        dataset_path = "1-Measurement_Settings/measurement_settings"
-        if dataset_path not in hdf_file:
-            raise KeyError(f"The HDF5 file '{hdf_file_path}' does not contain '{dataset_path}'.")
-        raw = hdf_file[dataset_path][0]
-        flat_settings = json.loads(raw.decode('utf-8') if isinstance(raw, bytes) else raw)
-
-    #rebuild the ini sections from the DeviceConfig structure (e.g. DCBiasConfig -> [DCBias])
-    ini = configparser.ConfigParser()
-    ini.optionxform = str
-    for section_field in fields(DeviceConfig):
-        section_name = section_field.type.__name__.removesuffix("Config")
-        ini.add_section(section_name)
-        for option in fields(section_field.type):
-            if option.name not in flat_settings:
-                continue
-            value = flat_settings[option.name]
-            if isinstance(value, bool):
-                value = int(value)
-            elif isinstance(value, list):
-                value = ", ".join(str(v) for v in value)
-            ini.set(section_name, option.name, str(value))
-
-    #ask the user where to save the config file
-    output_path = filedialog.asksaveasfilename(
-        title="Save extracted config as",
-        defaultextension=".ini",
-        initialfile="config.ini",
+    config_path = filedialog.askopenfilename(
+        title="Select measurement config file",
         filetypes=[("INI files", "*.ini"), ("All files", "*.*")],
     )
     root.destroy()
 
-    if not output_path:
-        print("No output file selected, config was not saved.")
-        return None
-
-    with open(output_path, 'w', encoding='utf-8') as config_file:
-        ini.write(config_file)
-    print(f"Config extracted to: {output_path}")
-
-    return output_path
-
-def parse_api_settings(self) -> ApiSettingsConfig:
-        """Liest nur die API-Einstellungen (nicht Teil der Gerätekonfiguration)."""
-        if not self.parser.read(self.file_path, encoding='utf-8'):
-            raise FileNotFoundError(f"Die Konfigurationsdatei '{self.file_path}' konnte nicht gefunden/gelesen werden.")
-
-        sec = 'ApiSettings'
-        return ApiSettingsConfig(
-            plot_type=self.parser.get(sec, 'plot_type', fallback='bode').strip().lower()
-        )
+    return config_path or None

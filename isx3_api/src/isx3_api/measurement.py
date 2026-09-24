@@ -10,11 +10,12 @@ from datetime import datetime
 import time
 import matplotlib.pyplot as plt
 import h5py
-import json
+import configparser
+import os
 
-from commands import ISX3 
-from plot_templates import PlotTemplates
-from config_handler import ConfigBuilder, ConfigParser
+from .commands import ISX3 
+from .plot_templates import PlotTemplates
+from .config_handler import ConfigBuilder, ConfigParser, select_config_file
 
 class Measurement:
 
@@ -58,7 +59,7 @@ class Measurement:
 
         if not self.device:
             print("Device not connected.")
-            return []
+            return None, None
 
         expected_results = number_of_spectra * 1
 
@@ -66,6 +67,7 @@ class Measurement:
 
         #starts the measuring and Reads the Data
         results = self.device.start_measurement(spectra=number_of_spectra, id = id, measurement_settings = measurement_settings)
+        timestamp_measurement = None
 
         if results is None:
             print (f"No Results for measurement Nr.{id}.")
@@ -79,24 +81,34 @@ class Measurement:
         #creates a new H5 file for the whole measurement campaign, and saves the data in H5 format under "measurements"
         current_date = datetime.now().strftime("%Y%m%d-%H%M%S")
         self.filename = f"measurement_results_{current_date}.h5"
-        h5_file = h5py.File(f"measurements/{self.filename}", 'w')
+        os.makedirs("measurements", exist_ok=True)
+        with h5py.File(f"measurements/{self.filename}", 'w'):
+            pass
         print(f"Creates Measurement-File: {self.filename}")
 
         
-    def safe_measurement_settings(self, settings):
-        #saves the general sttings for the measurement before the measurement
+    def safe_measurement_settings(self, config_path):
+        #saves the whole config file in the h5 file before the measurement
+        #structure: Configuration/<Section> (group) -> <key> = "<value>" (attribute, raw string from the ini file)
+        #comments are not saved, the config can be recreated with extract_config_from_hdf()
 
-        group_name = "1-Measurement_Settings"
+        group_name = "Configuration"
 
-        #gets measurement_settings dictionary from user and writes it as a string in a h5 file
-        measurement_settings = settings
-        measurement_settings_json = json.dumps(measurement_settings)
-        
+        #read the config file without interpolation so every value is saved exactly as written
+        ini = configparser.ConfigParser(interpolation=None)
+        ini.optionxform = str #keep the case of the keys
+        if not ini.read(config_path, encoding='utf-8'):
+            raise FileNotFoundError(f"The config file '{config_path}' could not be read.")
+
         with h5py.File(f"measurements/{self.filename}", 'a') as f:
-            group = f.create_group(group_name)
+            #track_order keeps the order of sections and keys like in the config file
+            group = f.create_group(group_name, track_order=True)
+            group.attrs["source_file"] = os.path.basename(config_path)
 
-            #measurement settings
-            group.create_dataset("measurement_settings", data=[measurement_settings_json])#saves measurement settings
+            for section in ini.sections():
+                section_group = group.create_group(section, track_order=True)
+                for key, value in ini.items(section, raw=True):
+                    section_group.attrs[key] = value
         return f
 
 
@@ -153,7 +165,8 @@ class Measurement:
         plt.pause(0.1)#short break
 
     #Methode for main loop
-    def measurement(self):
+    def measurement(self, config_path: str | None = None):
+        # config_path: path to the config.ini file. If None, a file dialog asks for it.
         # 0 create H5 file for the entire measurement campaign, with timestamp in filename
         # 1 connect to device (only once at the beginning of the measurment)
         # 2 get api settings from config file and set plot type
@@ -163,14 +176,20 @@ class Measurement:
         # 6 update and scale live plot 
         # 7 save measurment data in H5 format
 
+        #ask the user for the config file if no path was given
+        if config_path is None:
+            config_path = select_config_file()
+            if not config_path:
+                print("No config file selected, measurement cancelled.")
+                return
+        print(f"Uses config file: {config_path}")
+        self.config = ConfigBuilder(config_path)
+
         #creates a new H5 file for the whole measurement campaign, and saves the data in H5 format under "measurements"
-        current_date = datetime.now().strftime("%Y%m%d-%H%M%S")
-        self.filename = f"measurement_results_{current_date}.h5"
-        h5_file = h5py.File(f"measurements/{self.filename}", 'w')
-        print(f"Creates Measurement-File: {self.filename}")
+        self.create_h5_file()
 
         # 2
-        self.plot_type = self.ConfigParser._pa
+        self.plot_type = self.config.ISX3config.parse_api_settings().plot_type
 
         #get the measurement config as dictionary
         self.measurement_settings = self.config.get_settings_from_config()
@@ -178,8 +197,8 @@ class Measurement:
         #connects device via USB
         self.device.connect_device_fs(settings = self.measurement_settings) 
 
-        #saves the measurement settings as a group in the h5-file
-        self.safe_measurement_settings(settings = self.measurement_settings)
+        #saves the whole config file as a group in the h5-file
+        self.safe_measurement_settings(config_path = config_path)
         
         #load measurment settings (Options, frontend settings, Extension port settings, DC bias, SyncTime ) in device 
         self.device.set_options(settings=self.measurement_settings)

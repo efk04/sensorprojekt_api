@@ -1,0 +1,12 @@
+Metadata-Version: 2.4
+Name: isx3_api
+Version: 0.1.0
+Summary: A API package for using the ISX3 measurement device
+Author-email: Martin Engelke <martin.engelke@stud.htwk-leipzig.de>, Fedor Keil <fedor.keil@stud.htwk-leipzig.de>
+License-Expression: MIT
+Classifier: Programming Language :: Python :: 3
+Classifier: Operating System :: Windows
+Requires-Python: >=3.14
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Dynamic: license-file
