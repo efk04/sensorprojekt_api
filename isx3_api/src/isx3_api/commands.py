@@ -94,9 +94,11 @@ class ISX3:
                     stopbits=serial.STOPBITS_ONE,
                     bytesize=serial.EIGHTBITS,
                 )
-                print(f"Successfully Connected to {self.device.name}. \n")
+                print(f"Successfully Connected to {self.device.name}")
+                return self.device
             except serial.SerialException as e:
                 print("Error: ", e)
+            
 
             
             
@@ -114,7 +116,7 @@ class ISX3:
         frame = (bytes([cmd_tag, length]) + data + bytes([cmd_tag]))
         
         # Senden
-        print(frame)
+        #print("SEND_COMMAND: ", frame)
         self.device.write(frame)
         self.device.flush()
 
@@ -128,6 +130,7 @@ class ISX3:
         """
         # Wir erwarten 4 Bytes für das ACK
         ack_frame = self.device.read(4)
+        #print(f"ACK_FRAME: {ack_frame.hex()}")
         
         if len(ack_frame) < 4:
             raise TimeoutError(f"Timeout beim Warten auf ACK für Befehl {hex(original_cmd_tag)}")
@@ -172,7 +175,7 @@ class ISX3:
 
         if spectra == 0:
             data = data_start
-            print("starts continuous measurement. Press Ctrl+C to stop.")
+            #print("starts continuous measurement. Press Ctrl+C to stop.")
             self.device.write(bytes([cmd_tag, len(data)]) + data + bytes([cmd_tag]))
             #NOTE: frame capture during continuous mode isn't implemented yet -
             #read_measurement_data() only supports reading a known, fixed number of frames (spectra > 0),
@@ -189,11 +192,11 @@ class ISX3:
             print("continuous measurement stopped.")
         else:
             data = data_start
-            print (f"starts measurement Nr.{id} for {spectra} measurement cycles.")
+            #print (f"starts measurement Nr.{id} for {spectra} measurement cycles.")
             self.device.write(bytes([cmd_tag, len(data)]) + data + bytes([cmd_tag]))
             results = self.read_measurement_data(spectra=spectra, timeout=10.0, measurement_settings = measurement_settings)
 
-        print(f"Results for Measurement Nr. {id}:", results)
+        #print(f"Results for Measurement Nr. {id}:", results)
         return results
 
 
@@ -369,7 +372,7 @@ class ISX3:
         bias_voltage_v=settings["bias_voltage_v"]
         sync_time_us=settings["sync_time_us"]
 
-        print("Übertrage Options...")
+        #print("Übertrage Options...")
         
         if timestamp_mode == 1:
             self._send_command(0x97, bytes([0x01, 0x01])) # Enable ms[cite: 2]
@@ -395,7 +398,7 @@ class ISX3:
         self._send_command(0xB2, ext_payload) #[cite: 2]
         """
         # 4. DC Bias (0xB6 0x33 / 0x30)[cite: 2]
-        print("Übertrage DC Bias...")
+        #print("Übertrage DC Bias...")
         # Value setzen
         bias_payload = bytes([0x33]) + struct.pack('>f', bias_voltage_v) #[cite: 2]
         self._send_command(0xB6, bias_payload) #[cite: 2]
@@ -403,7 +406,7 @@ class ISX3:
         self._send_command(0xB6, bytes([0x30, 1 if dc_bias_enabled else 0])) #[cite: 2]
         
         # 5. Sync Time (0xB9)[cite: 2]
-        print("Übertrage Sync Time...")
+        #print("Übertrage Sync Time...")
         sync_payload = struct.pack('>I', sync_time_us) #[cite: 2]
         self._send_command(0xB9, sync_payload) #[cite: 2]
         
@@ -446,7 +449,7 @@ class ISX3:
 
         
         #1 Frontend (0xB0)[cite: 2]
-        print("Übertrage Frontend-Settings...")
+        #print("Übertrage Frontend-Settings...")
         # Clear old frontend settings to avoid overflow
         #cmd_tag = 0xB0 # CT -> Set FE Settings
         data = bytes([0xFF, 0xFF, 0xFF])  
@@ -460,7 +463,7 @@ class ISX3:
         self._send_command(0xB0, fe_payload) # [cite: 2]
         
         #2 Frequency Setup (0xB6)[cite: 2]
-        print("Übertrage Frequency-Setup...")
+        #print("Übertrage Frequency-Setup...")
         # Init / Clear current setup
         
         # Extended Options (EOPs) vorbereiten[cite: 2]
