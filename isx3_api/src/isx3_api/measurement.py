@@ -251,7 +251,7 @@ class Measurement:
 
 
             #if "time_of_continuous_measurement" = 0 run only one measurement cycle
-            if self.measurement_settings["time_of_continuous_measurement"] == 0:
+            if self.config_builder.parser.parse_api_settings().continuous_measurement == False:
                 break
 
 
