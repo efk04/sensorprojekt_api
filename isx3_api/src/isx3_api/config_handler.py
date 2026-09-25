@@ -231,55 +231,16 @@ class ConfigBuilder:
     def __init__(self, config_path: str = "config/config.ini"):
         self.measurement_setup_queue = []  #list of dictionarys to hold measurement setups
         self.settings = {} # empty dictionary to hold measurement settings from user
-        self.ISX3config = ConfigParser(config_path)
+        self.parser = ConfigParser(config_path)
 
     def get_settings_from_config(self):
-        print("davor")
-        config_settings = self.ISX3config.parse_as_flat_dict(False)
-        print(config_settings)
-        print("danach")
+        #print("davor")
+        config_settings = self.parser.parse_as_flat_dict(False)
+        #print(config_settings)
+        #print("danach")
         return config_settings
         
-    
-    def get_temp_test_settings(self):
-        #gets measurement settings from user
 
-        #Standard measurement parameters for code testing
-        test_settings = {
-            "interface_type": 'COM' , #COM -> (Seriell/USB) or TCP -> (Ethernet) (Ethernet connection is not implemented yet)
-            "port": 'COM3', #COM-Port for USB connection ("COM3" on Windows or "/dev/ttyUSB0" on Linux) or IP address for TCP connection
-            "baudrate": 9600, #e.g. 9600, 115200, etc. (must match the device's settings)
-            "timestamp_mode": 1, # Zeitstempel im Datenframe aktivieren: 0 = Deaktiviert, 1 = ms-Zeitstempel (4 Byte uint32), 2 = µs-Zeitstempel (5 Byte uint56)
-            "enable_current_range_output": True, #Strommessbereich im Rückgabeframe mitsenden (False = Deaktiviert, True = Aktiviert)
-            "measurement_mode": 2, #measurement_mode (int): Measurement mode  1 = 2-Punkt-Messung (0x01), 2 = 4-Punkt-Messung (0x02), 3 = 3-Punkt-Messung (0x03)
-            "measurement_channel": 1, #measurement_channel (int): Measurement channel to use: 1 = BNC Port / Port 1 (0x01), 2 = Extension Port (0x02), 3 = Extension Port 2 / Port 2 (0x03)
-            "current_range": 0, #current_measurement_range (int): 0 = Autoranging (0x00), 1 = ±10 mA (0x01), 2 = ±100 µA (0x02), 4 = ±1 µA (0x04), 6 = ±10 nA (0x06)
-            "voltage_range": 1, #voltage_measurement_range (int): 0 = Autoranging (0x00), 1 = ±1 V (0x01, Standard), 2 = ±0.09 V (0x02)
-            "counter_port": 0, #Extension Port Kanal-Auswahl (Befehl 0xB2 / 0xB3)
-            "reference_port": 0, # Werte hängen vom angeschlossenen Modul ab (z. B. MuxModule)
-            "working_sense_port": 0,
-            "working_port": 0,   
-            'mode': 'sweep', #measurement_mode (str): Whether to perform a frequency sweep (usage of the start, endfrequency, the count and scale option).
-            "frequency_hz": [1000.0, 2000.0, 5000.0, 10000.0, 50000.0], #frequency_list (list): List of frequencies to measure.
-            "start_frequency_hz": 1000.0,     #start_frequency (str): Starting frequency, e.g., "1kHz".
-            "end_frequency_hz": 100000.0,    #end_frequency (str): Ending frequency, e.g., "10MHz".
-            "count": 100, #count (int): Number of frequency points.
-            "scale": 'log', #scale (str): Scale type, "log" or "linear".
-            "precision": 1.0, #precision (float): Measurement precision.
-            "amplitude": 0.25, #amplitude (float): Signal amplitude.
-            "excitation_type": 1, #excitation_type (int): Type of excitation, "voltage" or "current". 
-            "point_delay_us": 0, #Punkt-Verzögerung zwischen Messpunkten in Mikrosekunden (EOP 0x01, uint32)
-            "phase_sync": False, # Phasensynchrones Umschalten (EOP 0x02): False = Inaktiv, True = Aktiv
-            "dc_bias_enabled": False, # DC-Bias (EOP 0x03): False = Inaktiv, True = Aktiv
-            "bias_voltage_v": 0.0, # Bias-Spannung in Volt (float, Bereich: -1.0 V bis +1.0 V)
-            "number_of_spectra": 1, #number (int) of measurement repetitions in the measurement loop
-            "sync_time_us": 0, #Zeit zwischen zwei Spektrenmessungen in Mikrosekunden (uint32)
-        }
-
-        return test_settings
-
-    
-    
     def generate_measurement_queue(self):
         #generates a queue of measurement setups (self.measurement_setup_queue) to be executed in the measurement loop
 
@@ -287,9 +248,10 @@ class ConfigBuilder:
         self.measurement_setup_queue = []
 
         #self.settings = self.get_temp_test_settings() #uses temp test_settings
-        self.settings = self.get_settings_from_config()
+        self.settings = self.parser.parse_as_flat_dict(False)
+        #print("Settings from config: ", self.settings)
 
-        frequency_queue_hz = [self.settings["frequency_hz"]]
+        #frequency_queue_hz = [self.settings["frequency_hz"]]
         match self.settings["mode"]:
             case "sweep":
                 if self.settings["scale"] == "linear":
@@ -297,13 +259,12 @@ class ConfigBuilder:
                 elif self.settings["scale"] == "logarithmic":
                     frequency_queue_hz = np.logspace(np.log10(self.settings["start_frequency_hz"]), np.log10(self.settings["stop_frequency_hz"]), self.settings["count"]).tolist()
             case "single":
-                frequency_queue_hz = [self.settings["frequency_hz"]]
+                frequency_queue_hz = self.settings["frequency_hz"]
 
         
         for index, freq in enumerate(frequency_queue_hz): 
             #first setup id is 1
             setup_id = index + 1
-
             single_setup = {
                 "id": setup_id,
                 "timestamp_mode": self.settings["timestamp_mode"], # Zeitstempel im Datenframe aktivieren: 0 = Deaktiviert, 1 = ms-Zeitstempel (4 Byte uint32), 2 = µs-Zeitstempel (5 Byte uint56)

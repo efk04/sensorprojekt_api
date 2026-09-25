@@ -13,7 +13,7 @@ import h5py
 import configparser
 import os
 
-from .commands import ISX3 
+from .commands import ISX3
 from .plot_templates import PlotTemplates
 from .config_handler import ConfigBuilder, ConfigParser, select_config_file
 
@@ -41,8 +41,8 @@ class Measurement:
         
         #include other librarys
         self.device = ISX3()
-        self.config = ConfigBuilder()
-        self.plttemp = PlotTemplates()
+        self.config_builder = ConfigBuilder()
+        self.plot_templates = PlotTemplates()
 
 
         #self.ISX3_T = ISX3Transmitter() 
@@ -63,7 +63,7 @@ class Measurement:
 
         expected_results = number_of_spectra * 1
 
-        print(f"Starts the measuring for {number_of_spectra} Cycles...")
+        #print(f"Starts the measuring for {number_of_spectra} Cycles...")
 
         #starts the measuring and Reads the Data
         results = self.device.start_measurement(spectra=number_of_spectra, id = id, measurement_settings = measurement_settings)
@@ -73,7 +73,7 @@ class Measurement:
             print (f"No Results for measurement Nr.{id}.")
         else:
             timestamp_measurement = time.time() #gets timestamp when results are recieved in us (microsecs)
-            print(f"Results for Measurement Nr. {id}:", results) #debug
+            #print(f"Results for Measurement Nr. {id}:", results) #debug
 
         return results, timestamp_measurement
 
@@ -139,7 +139,7 @@ class Measurement:
 
             group.attrs["created"] = datetime.now().isoformat()
 
-        print(f"Measurement Nr. {id} was saved in h5 file: {self.filename}")
+        #print(f"Measurement Nr. {id} was saved in h5 file: {self.filename}")
 
         return f
         
@@ -156,11 +156,11 @@ class Measurement:
 
         match self.plot_type:
             case "impedance_frequency":
-                self.plttemp.impedance_frequency(frequency=frequency, freq_id=res["id"], real=real, imag=imag)
+                self.plot_templates.impedance_frequency(frequency=frequency, freq_id=res["id"], real=real, imag=imag)
             case "nyquist":
-                self.plttemp.nyquist(real=real, imag=imag)
+                self.plot_templates.nyquist(real=real, imag=imag)
             case _:   # "bode" und alle unbekannten Werte
-                self.plttemp.bode(frequency=frequency, real=real, imag=imag)
+                self.plot_templates.bode(frequency=frequency, real=real, imag=imag)
 
         plt.pause(0.1)#short break
 
@@ -175,6 +175,7 @@ class Measurement:
         # 5 start measurment and read measurment_data
         # 6 update and scale live plot 
         # 7 save measurment data in H5 format
+        # 8 close port
 
         #ask the user for the config file if no path was given
         if config_path is None:
@@ -183,19 +184,19 @@ class Measurement:
                 print("No config file selected, measurement cancelled.")
                 return
         print(f"Uses config file: {config_path}")
-        self.config = ConfigBuilder(config_path)
+        self.config_builder = ConfigBuilder(config_path)
 
         #creates a new H5 file for the whole measurement campaign, and saves the data in H5 format under "measurements"
         self.create_h5_file()
 
         # 2
-        self.plot_type = self.config.ISX3config.parse_api_settings().plot_type
+        self.plot_type = self.config_builder.parser.parse_api_settings().plot_type
 
         #get the measurement config as dictionary
-        self.measurement_settings = self.config.get_settings_from_config()
+        self.measurement_settings = self.config_builder.parser.parse_as_flat_dict(False)
         
         #connects device via USB
-        self.device.connect_device_fs(settings = self.measurement_settings) 
+        serial_connection = self.device.connect_device_fs(settings = self.measurement_settings)
 
         #saves the whole config file as a group in the h5-file
         self.safe_measurement_settings(config_path = config_path)
@@ -205,7 +206,7 @@ class Measurement:
 
 
         #creats a queue of all measurement setups to be executed in the measurement loop
-        measurement_setup_queue = self.config.generate_measurement_queue()
+        measurement_setup_queue = self.config_builder.generate_measurement_queue()
 
         measurement_start = time.time()
 
@@ -215,14 +216,14 @@ class Measurement:
 
                 #get next measurement setup from measurement_setup_queue
                 current_setup = measurement_setup_queue.pop(0)
-                print(f'\n----- Starts Measurement with ID: {current_setup["id"]} ---') #id, bzw anderen Zähler hinzufügen, um überblick über ausgeführte Messungen zu behalten
-                print(current_setup)
+                #print(f'\n----- Starts Measurement with ID: {current_setup["id"]} ---') #id, bzw anderen Zähler hinzufügen, um überblick über ausgeführte Messungen zu behalten
+                #print(current_setup)
                 #load frequnecy setup from measurement_setup_queue in device
                 self.device.set_frequency_setup(current_setup=current_setup)
 
                 #start measurment and collect data
                 results = self.start_measurement(current_setup = current_setup, measurement_settings =  self.measurement_settings)
-                print(results)
+                #print(results)
                 
                 #update live plot with new data
                 self.update_live_plot(results = results, current_setup=current_setup)
@@ -241,6 +242,7 @@ class Measurement:
 
 
         print('\n----- finished all measurements -----')
+        serial_connection.close()
 
         #after finishing measurement loop, keep the plot open for further analysis, until user closes it
         plt.ioff() #interactive mode off
