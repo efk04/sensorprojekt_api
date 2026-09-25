@@ -221,7 +221,8 @@ class ISX3:
                    "imag": [],
                    "timestamp":[],
                    "timestamp_unit": [],
-                   "current_range": []
+                   "current_range": [],
+                   "frequencies": []
         }
 
         while len(results["id"]) < spectra:

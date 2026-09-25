@@ -78,6 +78,10 @@ class Measurement:
             timestamp_measurement = time.time() #gets timestamp when results are recieved in us (microsecs)
             #print(f"Results for Measurement Nr. {id}:", results) #debug
 
+        #include frequency as list in results
+        frequency = [current_setup["frequency"]]*len(results["id"]) #spectra
+        results["frequencies"].append(frequency)
+
         return results, timestamp_measurement
 
     def create_h5_file(self):
@@ -134,7 +138,7 @@ class Measurement:
 
             #measurement results
             group.create_dataset("timestamp", data = ts)
-            group.create_dataset("frequency", data = current_setup["frequency"]) #single frequency point
+            group.create_dataset("frequency", data = current_setup["frequency"]) #single frequency 
             group.create_dataset("frequency_id", data=res["id"]) #counts number of measurements with one frequency
             group.create_dataset("real_part", data=res["real"])
             group.create_dataset("imaginary_part", data=res["imag"])
@@ -148,22 +152,21 @@ class Measurement:
         
 
 
-    def update_live_plot(self, results, current_setup, current_results):
+    def update_live_plot(self, results, current_setup, current_results, len_measurement_queue):
         #update and scale live plot with new data
         res = results[0]
-
+        
         frequency = [current_setup["frequency"]]*len(res["id"]) #spectra
-        freq_id = res["id"]
-        real = res["real"]
-        imag = res["imag"]
+        
+
 
         match self.plot_type:
             case "impedance_frequency":
-                self.plot_templates.impedance_frequency(frequency=frequency, freq_id=res["id"], real=real, imag=imag)
+                self.plot_templates.impedance_frequency(live_results = res, current_results = current_results, len_measurement_queue = len_measurement_queue)
             case "nyquist":
-                self.plot_templates.nyquist(real=real, imag=imag)
+                self.plot_templates.nyquist(live_results = res, current_results = current_results, len_measurement_queue = len_measurement_queue)
             case _:   # "bode" und alle unbekannten Werte
-                self.plot_templates.bode(frequency=frequency, real=real, imag=imag)
+                self.plot_templates.bode(live_results = res, current_results = current_results, len_measurement_queue = len_measurement_queue)
 
         plt.pause(0.1)#short break
 
@@ -211,6 +214,7 @@ class Measurement:
 
         #creats a queue of all measurement setups to be executed in the measurement loop
         measurement_setup_queue = self.config_builder.generate_measurement_queue()
+        len_measurement_queue = len(measurement_setup_queue)
         print("Press [e] to stop the measurement manually.")
         
         icm = 0 #running index for continuous measurement
@@ -224,6 +228,7 @@ class Measurement:
                 break
 
             self.current_results = [] #clear current results
+            plt.cla()
 
             icm = icm + 1 
             while temp_measurement_setup_queue:
@@ -243,7 +248,7 @@ class Measurement:
                 self.current_results.append(results[0]) #get all measurements from one measurement cycle
 
                 #update live plot with new data
-                self.update_live_plot(results = results, current_setup=current_setup, current_results = self.current_results)
+                self.update_live_plot(results = results, current_setup=current_setup, current_results = self.current_results, len_measurement_queue = len_measurement_queue)
 
                 #save measurment data in H5 format
                 self.safe_measurment(results = results, current_setup=current_setup, icm = icm)
@@ -262,7 +267,7 @@ class Measurement:
 
 
         print('\n----- finished all measurements -----')
-        serial_connection.close()
+        #serial_connection.close()
 
         #after finishing measurement loop, keep the plot open for further analysis, until user closes it
         plt.ioff() #interactive mode off
