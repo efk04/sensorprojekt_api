@@ -32,6 +32,7 @@ class Measurement:
         self.tcp_protocol = None
         self.frequencies = []
         self.manual_stop = False
+        self.current_results = []
 
 
         self.h5_filename = '' #filename of the h5-file
@@ -222,7 +223,9 @@ class Measurement:
             if self.manual_stop == True:
                 print("manual measurement stop by pressing [e]")
                 break
-            
+
+            self.current_results = [] #clear current results
+
             icm = icm + 1 
             while temp_measurement_setup_queue:
 
@@ -244,10 +247,14 @@ class Measurement:
                 #save measurment data in H5 format
                 self.safe_measurment(results = results, current_setup=current_setup, icm = icm)
 
+                self.current_results.append(results[0])
+
+                self.current_results.append(results[0])
+
                 if keyboard.is_pressed('e'):
                     self.manual_stop = True
                     print("manual measurement stop by pressing [q]")
-                    return self.manual_stop
+                    #return self.manual_stop
 
 
             #if "time_of_continuous_measurement" = 0 run only one measurement cycle
