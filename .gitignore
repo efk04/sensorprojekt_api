@@ -7,8 +7,9 @@ measurements/
 *.h5
 *.png
 *.txt
+*.ini
 
 #scripts
 test_config.py
-ISX3_measurment_copy.py
+
 

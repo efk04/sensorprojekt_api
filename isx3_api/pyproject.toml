@@ -7,7 +7,7 @@ authors = [
 ]
 description = "A API package for using the ISX3 measurement device"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.13"
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: Windows",

@@ -421,7 +421,7 @@ class ISX3:
             measurement_channel (str): Measurement channel to use (e.g., "Main Port").
             current_measurement_range (str): Current measurement range (e.g., "10mA").
             voltage_measurement_range (str): Voltage measurement range (e.g., "1V").
-            frequency(float or str): Frequency point for single frequency measurement
+            frequency(float or str): Frequency for  measurement
             precision (float): Measurement precision.
             amplitude (str): Signal amplitude.
             excitation_type (str): Type of excitation, "voltage" or "current".
