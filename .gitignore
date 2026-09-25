@@ -11,7 +11,5 @@ measurements/
 
 config_example.ini
 
-#scripts
+#files
 test_config.py
-
-

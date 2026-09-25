@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass
 @dataclass
 class ApiSettingsConfig:
     plot_type: str
+    continuous_measurement: bool
 
 @dataclass
 class ConnectionConfig:
@@ -65,12 +66,7 @@ class SyncTimeConfig:
 class MeasurementConfig:
     number_of_spectra: int
 
-@dataclass
-class ContinuousMeasurementConfig:
-    time_of_continuous_measurement: int
     
-
-
 @dataclass
 class DeviceConfig:
     connection: ConnectionConfig
@@ -81,7 +77,6 @@ class DeviceConfig:
     dc_bias: DCBiasConfig
     sync_time: SyncTimeConfig
     measurement: MeasurementConfig
-    continuous_measurement: ContinuousMeasurementConfig
 
 
 
@@ -111,7 +106,6 @@ class ConfigParser:
             dc_bias=self._parse_dc_bias(),
             sync_time=self._parse_sync_time(),
             measurement=self._parse_measurement(),
-            continuous_measurement=self._parse_continuous_measurement()
         )
 
     def _parse_connection(self) -> ConnectionConfig:
@@ -185,12 +179,6 @@ class ConfigParser:
             number_of_spectra=self.parser.getint(sec, 'number_of_spectra', fallback=1)
         )
 
-    #Geräteunspezifische Messeinstellungen
-    def _parse_continuous_measurement(self) -> ContinuousMeasurementConfig:
-        sec = 'ContinuousMeasurement'
-        return ContinuousMeasurementConfig(
-            time_of_continuous_measurement = self.parser.getint(sec, 'time_of_continuous_measurement',fallback=0)
-        )
 
     def parse_as_dict(self) -> dict:
         """Parses the config and returns a nested dictionary of all values."""
@@ -222,7 +210,8 @@ class ConfigParser:
 
         sec = 'ApiSettings'
         return ApiSettingsConfig(
-            plot_type=self.parser.get(sec, 'plot_type', fallback='bode').strip().lower()
+            plot_type=self.parser.get(sec, 'plot_type', fallback='bode').strip().lower(),
+            continuous_measurement=self.parser.getboolean(sec, 'continuous_measurement', fallback=False)
         )
 
 
@@ -291,9 +280,7 @@ class ConfigBuilder:
                 "dc_bias_enabled": int(self.settings["dc_bias_enabled"]), # DC-Bias (EOP 0x03): 0 = Inaktiv, 1 = Aktiv
                 "bias_voltage_v": self.settings["bias_voltage_v"], # Bias-Spannung in Volt (float, Bereich: -1.0 V bis +1.0 V)
                 "number_of_spectra": self.settings["number_of_spectra"], #number (int) of measurement repetitions in the measurement loop
-                "sync_time_us": self.settings["sync_time_us"], #Zeit zwischen zwei Spektrenmessungen in Mikrosekunden (uint32)
-                "time_of_continuous_measurement": self.settings["time_of_continuous_measurement"] #Zeitraum (in s) in der die Messung mit diesen Einstellungen wiederholt wird (0 -> Einzelmessung)
-                
+                "sync_time_us": self.settings["sync_time_us"], #Zeit zwischen zwei Spektrenmessungen in Mikrosekunden (uint32)                
             }
 
             #includes setup in queue
