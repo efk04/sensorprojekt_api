@@ -16,7 +16,7 @@ import keyboard
 
 from .commands import ISX3
 from .plot_templates import PlotTemplates
-from .config_handler import ConfigBuilder, ConfigParser, select_config_file
+from .config_handler import ConfigBuilder, select_config_file
 
 class Measurement:
 
