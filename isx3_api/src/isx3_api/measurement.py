@@ -209,8 +209,8 @@ class Measurement:
 
 
         #creats a queue of all measurement setups to be executed in the measurement loop
-        measurement_setup_queue = self.config.generate_measurement_queue()
-        print("Press [q] for 1 second to stop the continuous measurement ")
+        measurement_setup_queue = self.config_builder.generate_measurement_queue()
+        print("Press [e] to stop the measurement manually.")
         
         icm = 0 #running index for continuous measurement
 
@@ -220,7 +220,7 @@ class Measurement:
 
             #check if manual stop is triggert
             if self.manual_stop == True:
-                print("manual measurement stop by pressing [q]")
+                print("manual measurement stop by pressing [e]")
                 break
             
             icm = icm + 1 
@@ -229,8 +229,8 @@ class Measurement:
                 #get next measurement setup from measurement_setup_queue
                 current_setup = temp_measurement_setup_queue.pop(0)
                 current_id = str(icm)+"."+str(current_setup["id"])
-                print(f'\n----- Starts Measurement with ID:{current_id} ---') #id, bzw anderen Zähler hinzufügen, um überblick über ausgeführte Messungen zu behalten
-                print(current_setup)
+                #print(f'\n----- Starts Measurement with ID:{current_id} ---') #id, bzw anderen Zähler hinzufügen, um überblick über ausgeführte Messungen zu behalten
+                #print(current_setup)
                 #load frequnecy setup from measurement_setup_queue in device
                 self.device.set_frequency_setup(current_setup=current_setup)
 
@@ -244,7 +244,7 @@ class Measurement:
                 #save measurment data in H5 format
                 self.safe_measurment(results = results, current_setup=current_setup, icm = icm)
 
-                if keyboard.is_pressed('q'):
+                if keyboard.is_pressed('e'):
                     self.manual_stop = True
                     print("manual measurement stop by pressing [q]")
                     return self.manual_stop

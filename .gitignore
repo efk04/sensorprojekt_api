@@ -11,6 +11,3 @@ measurements/
 
 #files
 test_config.py
-isx3_api/tests/config_example.ini
-
-

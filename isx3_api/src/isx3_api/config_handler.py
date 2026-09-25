@@ -280,9 +280,7 @@ class ConfigBuilder:
                 "dc_bias_enabled": int(self.settings["dc_bias_enabled"]), # DC-Bias (EOP 0x03): 0 = Inaktiv, 1 = Aktiv
                 "bias_voltage_v": self.settings["bias_voltage_v"], # Bias-Spannung in Volt (float, Bereich: -1.0 V bis +1.0 V)
                 "number_of_spectra": self.settings["number_of_spectra"], #number (int) of measurement repetitions in the measurement loop
-                "sync_time_us": self.settings["sync_time_us"], #Zeit zwischen zwei Spektrenmessungen in Mikrosekunden (uint32)
-                "time_of_continuous_measurement": self.settings["time_of_continuous_measurement"] #Zeitraum (in s) in der die Messung mit diesen Einstellungen wiederholt wird (0 -> Einzelmessung)
-                
+                "sync_time_us": self.settings["sync_time_us"], #Zeit zwischen zwei Spektrenmessungen in Mikrosekunden (uint32)                
             }
 
             #includes setup in queue
