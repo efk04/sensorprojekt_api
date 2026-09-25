@@ -7,7 +7,9 @@ measurements/
 *.h5
 *.png
 *.txt
-*.ini
+
+
+config_example.ini
 
 #scripts
 test_config.py
