@@ -2,11 +2,11 @@
 __pycache__/
 isx3.venv/
 measurements/
+isx3_api.egg-info/
 
 #datatype
 *.h5
 *.png
-*.txt
 *.ini
 
 #files
