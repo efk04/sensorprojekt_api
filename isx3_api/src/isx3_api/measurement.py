@@ -148,7 +148,7 @@ class Measurement:
         
 
 
-    def update_live_plot(self, results, current_setup):
+    def update_live_plot(self, results, current_setup, current_results):
         #update and scale live plot with new data
         res = results[0]
 
@@ -221,7 +221,6 @@ class Measurement:
 
             #check if manual stop is triggert
             if self.manual_stop == True:
-                print("manual measurement stop by pressing [e]")
                 break
 
             self.current_results = [] #clear current results
@@ -240,21 +239,20 @@ class Measurement:
                 #start measurment and collect data
                 results = self.start_measurement(current_setup = current_setup, measurement_settings =  self.measurement_settings)
                 #print(results)
-                
+
+                self.current_results.append(results[0]) #get all measurements from one measurement cycle
+
                 #update live plot with new data
-                self.update_live_plot(results = results, current_setup=current_setup)
+                self.update_live_plot(results = results, current_setup=current_setup, current_results = self.current_results)
 
                 #save measurment data in H5 format
                 self.safe_measurment(results = results, current_setup=current_setup, icm = icm)
 
-                self.current_results.append(results[0])
-
-                self.current_results.append(results[0])
-
+                
                 if keyboard.is_pressed('e'):
                     self.manual_stop = True
-                    print("manual measurement stop by pressing [q]")
-                    #return self.manual_stop
+                    print("manual measurement stop by pressing [e]")
+                    return self.manual_stop
 
 
             #if "time_of_continuous_measurement" = 0 run only one measurement cycle
