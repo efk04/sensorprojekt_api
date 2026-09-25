@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 import h5py
 import configparser
 import os
+import keyboard
 
 from .commands import ISX3 
 from .plot_templates import PlotTemplates
@@ -30,6 +31,7 @@ class Measurement:
         self.print_msg = True
         self.tcp_protocol = None
         self.frequencies = []
+        self.manual_stop = False
 
 
         self.h5_filename = '' #filename of the h5-file
@@ -48,7 +50,7 @@ class Measurement:
         #self.ISX3_T = ISX3Transmitter() 
         #start liveplot (evtl. später noch abfragen ob liveplot gewünscht ist)
         plt.ion() #interactive mode on
-    
+        plt.rcParams['keymap.quit'] = [] # deactivates the command q for refreshing plot
 
 
     def start_measurement(self, current_setup, measurement_settings):
@@ -112,10 +114,10 @@ class Measurement:
         return f
 
 
-    def safe_measurment(self, results, current_setup):
+    def safe_measurment(self, results, current_setup, icm):
         #defines H5 filename and saves measurement settings and the measurement results in H5 format via h5py (1 group per measurement repetition)
        
-        id = current_setup["id"]
+        current_id = str(icm)+"."+str(current_setup["id"])
         ts = results[1]
         res = results[0]
         
@@ -123,7 +125,7 @@ class Measurement:
             raise ValueError("no results")
         
         #creates groupnames with the id -> Number of measurement
-        group_name = f"Measurement_{id}"
+        group_name = f"Measurement_{current_id}"
 
         with h5py.File(f"measurements/{self.filename}", 'a') as f:
 
@@ -139,7 +141,7 @@ class Measurement:
 
             group.attrs["created"] = datetime.now().isoformat()
 
-        print(f"Measurement Nr. {id} was saved in h5 file: {self.filename}")
+        print(f"Measurement Nr. {current_id} was saved in h5 file: {self.filename}")
 
         return f
         
@@ -163,6 +165,7 @@ class Measurement:
                 self.plttemp.bode(frequency=frequency, real=real, imag=imag)
 
         plt.pause(0.1)#short break
+
 
     #Methode for main loop
     def measurement(self, config_path: str | None = None):
@@ -206,16 +209,26 @@ class Measurement:
 
         #creats a queue of all measurement setups to be executed in the measurement loop
         measurement_setup_queue = self.config.generate_measurement_queue()
-
-        measurement_start = time.time()
+        print("Press [q] for 1 second to stop the continuous measurement ")
+        
+        icm = 0 #running index for continuous measurement
 
         while True:
             #Measurement loop for all frequency setups in measurement_setup_queue
-            while measurement_setup_queue:
+            temp_measurement_setup_queue = list(measurement_setup_queue)
+
+            #check if manual stop is triggert
+            if self.manual_stop == True:
+                print("manual measurement stop by pressing [q]")
+                break
+            
+            icm = icm + 1 
+            while temp_measurement_setup_queue:
 
                 #get next measurement setup from measurement_setup_queue
-                current_setup = measurement_setup_queue.pop(0)
-                print(f'\n----- Starts Measurement with ID: {current_setup["id"]} ---') #id, bzw anderen Zähler hinzufügen, um überblick über ausgeführte Messungen zu behalten
+                current_setup = temp_measurement_setup_queue.pop(0)
+                current_id = str(icm)+"."+str(current_setup["id"])
+                print(f'\n----- Starts Measurement with ID:{current_id} ---') #id, bzw anderen Zähler hinzufügen, um überblick über ausgeführte Messungen zu behalten
                 print(current_setup)
                 #load frequnecy setup from measurement_setup_queue in device
                 self.device.set_frequency_setup(current_setup=current_setup)
@@ -228,11 +241,13 @@ class Measurement:
                 self.update_live_plot(results = results, current_setup=current_setup)
 
                 #save measurment data in H5 format
-                self.safe_measurment(results = results, current_setup=current_setup)
+                self.safe_measurment(results = results, current_setup=current_setup, icm = icm)
 
-                #if "time_of_continuous_measurement" > 0 run continuous measurement cycles
-                if self.measurement_settings["time_of_continuous_measurement"] > 0 and (time.time() - measurement_start) >= self.measurement_settings["time_of_continuous_measurement"]:
-                    break
+                if keyboard.is_pressed('q'):
+                    self.manual_stop = True
+                    print("manual measurement stop by pressing [q]")
+                    return self.manual_stop
+
 
             #if "time_of_continuous_measurement" = 0 run only one measurement cycle
             if self.measurement_settings["time_of_continuous_measurement"] == 0:
