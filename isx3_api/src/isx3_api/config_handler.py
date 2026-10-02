@@ -107,14 +107,14 @@ class FrequencySetupConfig:
     Frequency setup of the measurement (section ``[FrequencySetup]``, command ``0xB6``).
 
     Attributes:
-        mode (str): ``"sweep"`` (frequencies from start to stop) or ``"single"``
+        mode (str): ``"auto"`` (frequencies from start to stop) or ``"user_defined"``
             (frequencies from :attr:`frequency_hz`).
-        frequency_hz (list[float]): Frequencies in Hz for ``"single"`` mode.
+        frequency_hz (list[float]): Frequencies in Hz for ``"user_defined"`` mode.
             In the config file they are given as a comma separated list.
         precision (float): Measurement precision.
-        start_frequency_hz (float): Start frequency in Hz for ``"sweep"`` mode.
-        stop_frequency_hz (float): Stop frequency in Hz for ``"sweep"`` mode.
-        count (int): Number of frequency points for ``"sweep"`` mode.
+        start_frequency_hz (float): Start frequency in Hz for ``"auto"`` mode.
+        stop_frequency_hz (float): Stop frequency in Hz for ``"auto"`` mode.
+        count (int): Number of frequency points for ``"auto"`` mode.
         scale (str): Spacing of the sweep frequencies: ``"linear"`` or ``"logarithmic"``.
         excitation_type (int): Type of excitation (1 = default, other values are
             sent to the device as extended option ``0x03``).
@@ -281,7 +281,7 @@ class ConfigParser:
     def _parse_frequency_setup(self) -> FrequencySetupConfig:
         sec = 'FrequencySetup'
         return FrequencySetupConfig(
-            mode=self.parser.get(sec, 'mode', fallback='sweep'),
+            mode=self.parser.get(sec, 'mode', fallback='auto'),
             frequency_hz=[float(f) for f in self.parser.get(sec, 'frequency_hz', fallback='1000.0').split(',')],
             precision=self.parser.getfloat(sec, 'precision', fallback=1.0),
             start_frequency_hz=self.parser.getfloat(sec, 'start_frequency_hz', fallback=100.0),
@@ -403,9 +403,9 @@ class ConfigBuilder:
 
         The frequency points depend on the frequency mode:
 
-        - ``"sweep"``: ``count`` frequencies from ``start_frequency_hz`` to
+        - ``"auto"``: ``count`` frequencies from ``start_frequency_hz`` to
           ``stop_frequency_hz``, with ``"linear"`` or ``"logarithmic"`` spacing.
-        - ``"single"``: the frequencies from ``frequency_hz``.
+        - ``"user_defined"``: the frequencies from ``frequency_hz``.
 
         Each setup contains all device settings, the frequency of the point
         (key ``"frequency"``) and a running ``"id"`` starting at 1.
@@ -425,12 +425,12 @@ class ConfigBuilder:
 
         #frequency_queue_hz = [self.settings["frequency_hz"]]
         match self.settings["mode"]:
-            case "sweep":
+            case "auto":
                 if self.settings["scale"] == "linear":
                     frequency_queue_hz = np.linspace(self.settings["start_frequency_hz"], self.settings["stop_frequency_hz"], self.settings["count"]).tolist()
                 elif self.settings["scale"] == "logarithmic":
                     frequency_queue_hz = np.logspace(np.log10(self.settings["start_frequency_hz"]), np.log10(self.settings["stop_frequency_hz"]), self.settings["count"]).tolist()
-            case "single":
+            case "user_defined":
                 frequency_queue_hz = self.settings["frequency_hz"]
 
         
@@ -449,7 +449,7 @@ class ConfigBuilder:
                 "reference_port": self.settings["reference_port"],
                 "working_sense_port": self.settings["working_sense_port"],
                 "working_port": self.settings["working_port"],
-                "mode":self.settings["mode"], #frequency_sweep (str): Measurement mode, "sweep" or "single" (see FrequencySetupConfig.mode).
+                "mode":self.settings["mode"], #frequency_sweep (str): Measurement mode, "auto" or "user_defined" (see FrequencySetupConfig.mode).
                 "frequency":freq, #frequency of measurment
                 "start_frequency_hz":self.settings["start_frequency_hz"],   #start_frequency (str): Starting frequency, e.g., "1kHz"
                 "stop_frequency_hz":self.settings["stop_frequency_hz"], #end_frequency (str): Ending frequency, e.g., "10MHz"

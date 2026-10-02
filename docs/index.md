@@ -35,15 +35,9 @@ quickstart
 
 ```{toctree}
 :maxdepth: 2
-:caption: User guide
+:caption: Content
 
 configuration
 data_format
-```
-
-```{toctree}
-:maxdepth: 2
-:caption: API reference
-
 api/index
 ```

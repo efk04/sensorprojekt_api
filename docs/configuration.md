@@ -71,12 +71,12 @@ Frequency setup (command `0xB6`).
 
 | Key | Default | Description |
 |---|---|---|
-| `mode` | `sweep` | `single` (frequencies from `frequency_hz`) or `sweep` |
+| `mode` | `auto` | `user_defined` (frequencies from `frequency_hz`) or `user_defined` |
 | `frequency_hz` | `1000.0` | Comma separated list of frequencies in Hz (`single` mode) |
-| `start_frequency_hz` | `100.0` | Start frequency in Hz (`sweep` mode) |
-| `stop_frequency_hz` | `100000.0` | Stop frequency in Hz (`sweep` mode) |
-| `count` | `10` | Number of frequency points (`sweep` mode) |
-| `scale` | `linear` | `linear` or `logarithmic` (`sweep` mode) |
+| `start_frequency_hz` | `100.0` | Start frequency in Hz (`auto` mode) |
+| `stop_frequency_hz` | `100000.0` | Stop frequency in Hz (`auto` mode) |
+| `count` | `10` | Number of frequency points (`auto` mode) |
+| `scale` | `linear` | `linear` or `logarithmic` (`auto` mode) |
 | `precision` | `1.0` | Measurement precision |
 | `excitation_type` | `1` | 1 = voltage (0.0001 V to 1 V), 2 = current (1 µA to 10 mA) |
 | `amplitude` | `0.01` | Excitation amplitude in V or A |
