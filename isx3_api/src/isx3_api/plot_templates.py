@@ -43,8 +43,10 @@ class PlotTemplates:
         if len(current_results) == len_measurement_queue:
             self.past_results.append(current_results)
 
-            if len(self.past_results)>5: #show only the last 5 results
-                del self.past_results[0]  
+            if len(self.past_results)>1: #if there are last results
+                  
+                if len(self.past_results)>5: #show only the last 5 results
+                    del self.past_results[0]  
 
                 #clear old results
                 self.past_id = []
