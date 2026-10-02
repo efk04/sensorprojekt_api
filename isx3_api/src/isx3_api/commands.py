@@ -1,6 +1,9 @@
 """
-Class for communication with the ISX3 device
+Communication with the Sciospec ISX-3 / ISX-3mini device.
 
+The device is controlled via the serial port (USB full-speed). Every command
+is sent as a frame of the form ``[CMD-Tag] [Length] [Data...] [CMD-Tag]``
+and acknowledged by the device with an ACK frame (see :data:`MSG_DICT`).
 """
 
 from logging import config
@@ -14,6 +17,7 @@ import os
 import sys
 
 
+#: Status codes of the ACK frames (``0x18 0x01 [Status] 0x18``) and their meaning.
 MSG_DICT = {
     "0x01": "No message inside the message buffer",
     "0x02": "Timeout: Communication-timeout (less data than expected)",
@@ -28,15 +32,34 @@ MSG_DICT = {
 
 
 class ISX3:
+    """
+    Device handler for the ISX-3: connecting, configuring and measuring.
 
+    Example:
+        >>> isx3 = ISX3()
+        >>> isx3.connect_device_fs({"port": "COM3", "baudrate": 115200})
+        >>> isx3.set_options(settings)
+        >>> isx3.set_frequency_setup(current_setup)
+        >>> results = isx3.start_measurement(spectra=1, id=1, measurement_settings=settings)
+
+    Attributes:
+        device (serial.Serial): Open serial connection (None if not connected).
+        serial_protocol (str): Used serial protocol (``"FS"`` = USB full-speed).
+        print_msg (bool): If True, status messages are printed.
+    """
+
+    #: Command tag of an ACK frame.
     ACK_TAG = 0x18
+    #: Status code: command has been executed successfully.
     ACK_SUCCESS = 0x83
+    #: Status code: command has not been executed (wrong syntax).
     NACK_SYNTAX = 0x81
+    #: Status code: command could not be recognized.
     NACK_NOT_RECOGNIZED = 0x82
 
     def __init__(self):
         """
-                    Initializes an ISX3 device handler.
+        Initializes an ISX3 device handler (without connecting to the device).
         """
         self.serial_protocol = None
         self.device = None
@@ -64,11 +87,19 @@ class ISX3:
             """
             Connects to the ISX3 device via the specified serial port (USB full-speed).
 
+            Errors (port not available, :class:`serial.SerialException`) are
+            printed and not raised.
+
             Args:
-                port (str): COM port to connect to (e.g., "COM3").
-                baudrate (int): Baud rate for the serial connection (default: 9600).
-            Raises:
-                serial.SerialException: If the connection cannot be established.
+                settings (dict): Settings with the keys:
+
+                    - ``port`` (str): COM port to connect to (e.g. ``"COM3"``).
+                    - ``baudrate`` (int): Baud rate of the serial connection
+                      (must match the device settings, e.g. ``115200``).
+
+            Returns:
+                serial.Serial | None: The open serial connection, or None if the
+                connection failed.
             """
 
             port = settings["port"]  # Use the port from the settings
@@ -105,8 +136,19 @@ class ISX3:
 
     def _send_command(self, cmd_tag: int, data: bytes):
         """
-        Verpackt die Daten in das Sciospec Frame-Format und sendet sie.
-        Format: [CMD-Tag] [Length] [Data...] [CMD-Tag]
+        Packs the data into the Sciospec frame format, sends it and waits for the ACK.
+
+        Format: ``[CMD-Tag] [Length] [Data...] [CMD-Tag]``
+
+        Args:
+            cmd_tag (int): Command tag (e.g. ``0xB6``).
+            data (bytes): Payload of the frame (max. 255 bytes).
+
+        Raises:
+            ValueError: If the payload is longer than 255 bytes or the device
+                answers with a NACK.
+            TimeoutError: If no ACK is received.
+            ConnectionError: If an invalid ACK frame is received.
         """
         length = len(data)
         if length > 255:
@@ -125,8 +167,17 @@ class ISX3:
 
     def _wait_for_ack(self, original_cmd_tag: int):
         """
-        Liest den Rückgabe-Frame und prüft auf erfolgreiches Acknowledge.
-        Ein ACK-Frame sieht so aus: 0x18 0x01 [Status] 0x18[cite: 2]
+        Reads the answer frame and checks for a successful acknowledge.
+
+        An ACK frame looks like this: ``0x18 0x01 [Status] 0x18``
+
+        Args:
+            original_cmd_tag (int): Command tag of the sent command (used in error messages).
+
+        Raises:
+            TimeoutError: If less than 4 bytes are received.
+            ConnectionError: If the frame is not a valid ACK frame.
+            ValueError: If the status is a NACK or unknown.
         """
         # Wir erwarten 4 Bytes für das ACK
         ack_frame = self.device.read(4)
@@ -151,15 +202,21 @@ class ISX3:
 
     def start_measurement(self, spectra, id, measurement_settings):
         """
-        Starts the measurement process on the ISX3 device.
-        when spectra is 0, it starts a continuous measurement that runs until manually
-        stopped (Ctrl+C), at which point the command (B8 01 00 B8) is sent to stop it.
+        Starts the measurement process on the ISX3 device (command ``0xB8``).
 
-         Args:
+        When ``spectra`` is 0, it starts a continuous measurement that runs until
+        manually stopped (Ctrl+C), at which point the command ``B8 01 00 B8`` is
+        sent to stop it. In continuous mode no measurement data is read yet.
+
+        Args:
             spectra (int): Number of spectra to measure. If 0, starts a continuous measurement.
             id (int): Identifier for the measurement.
+            measurement_settings (dict): Measurement settings, used to decode the
+                data frames (see :meth:`read_measurement_data`).
 
-            returns: results (list): List of tuples containing (frequency_id, real_part, imaginary_part) for each measurement.
+        Returns:
+            dict: Measurement results, see :meth:`read_measurement_data`.
+            Empty list if the device is not connected.
         """
 
         if not self.device:
@@ -202,15 +259,29 @@ class ISX3:
 
     def read_measurement_data(self, spectra, timeout, measurement_settings):
         """
-        Reads measurement data from the ISX3 device.
-        
+        Reads measurement data frames from the ISX3 device.
+
+        Structure of a data frame (``0xB8 [Length] [Data] 0xB8``)::
+
+            id (2 byte) | timestamp (4 byte ms / 5 byte µs)* | current range (1 byte)* | real (4 byte) | imag (4 byte)
+
+        ``*`` only if timestamp / current range output is activated
+        (see :meth:`set_options`).
+
         Args:
-            expected_results (int): Total number of expected measurement results.
-            timeout (float): Maximum time to wait for measurement results.      
-            
-        return: 
-            results: list of tuples containing (frequency_id, real_part, imaginary_part) for each measurement.
-            
+            spectra (int): Number of data frames to read.
+            timeout (float): Maximum time to wait for measurement results
+                (currently not used).
+            measurement_settings (dict): Measurement settings, the key
+                ``enable_current_range_output`` is used to decode the frames.
+
+        Returns:
+            dict: Measurement results with the keys ``id``, ``real``, ``imag``,
+            ``timestamp``, ``timestamp_unit``, ``current_range`` and
+            ``frequencies`` (one list each).
+
+        Raises:
+            ValueError: If a frame has an invalid end tag or an unknown length.
         """
         current_range = 0
         timestamp_ms = 0
@@ -303,11 +374,8 @@ class ISX3:
 
     def software_reset(self):
         """
-                Sends a software reset command to the device.
-
-                Returns:
-                    None
-                """
+        Sends a software reset command (``A1 00 A1``) to the device.
+        """
         self.print_msg = True
         self.write_command_string(bytearray([0xA1, 0x00, 0xA1]))
         self.print_msg = False
@@ -315,9 +383,13 @@ class ISX3:
 
     def get_ip_address(self):
         """
-        Liest IP-Adresse des ISX-3 aus (Get IP Command 0xBE).
-        Syntax: [CT=0xBE] [01] [01] [CT=0xBE]
-        Return: [CT=0xBE] [05] [01] [A][B][C][D] [CT=0xBE]
+        Reads the IP address of the ISX-3 (Get IP command ``0xBE``).
+
+        - Request: ``[CT=0xBE] [01] [01] [CT=0xBE]``
+        - Answer: ``[CT=0xBE] [05] [01] [A] [B] [C] [D] [CT=0xBE]``
+
+        Returns:
+            str: IP address in the form ``"A.B.C.D"``.
         """
         self.device.reset_input_buffer()
         
@@ -340,22 +412,31 @@ class ISX3:
     
     def set_options(self, settings): # config: ISX3DeviceConfig
         """
-        Configures the frontend settings for the measurement.
+        Sends the general measurement options to the device.
+
+        This includes the timestamp and current range output (``0x97``),
+        the DC bias (``0xB6``) and the sync time (``0xB9``). The extension port
+        settings (``0xB2``) are not sent yet.
 
         Args:
-            timestamp_mode (int): Zeitstempel im Datenframe aktivieren: 0 = Deaktiviert, 1 = ms-Zeitstempel (4 Byte uint32), 2 = µs-Zeitstempel (5 Byte uint56)
-            enable_current_range_output (int): Strommessbereich im Rückgabeframe mitsenden (0 = Deaktiviert, 1 = Aktiviert)
-            #Extension Port Kanal-Auswahl (Befehl 0xB2 / 0xB3). Werte hängen vom angeschlossenen Modul ab (z. B. MuxModule)
-            counter_port (int): 
-            reference_port (int):
-            working_sense_port (int):   
-            working_port (int):
-            dc_bias_enabled (bool): Whether to enable DC bias.
-            bias_voltage_v (float): DC bias voltage in volts.
-            sync_time_us (int): Time between two spectrum measurements in microseconds.
-        
-            Returns:
-            None
+            settings (dict): Measurement settings (e.g. from
+                :meth:`isx3_api.config_handler.ConfigParser.parse_as_flat_dict`)
+                with the keys:
+
+                - ``timestamp_mode`` (int): Timestamp in the data frame:
+                  0 = disabled, 1 = ms timestamp (4 byte uint32),
+                  2 = µs timestamp (5 byte uint56).
+                - ``enable_current_range_output`` (int): Send the current range
+                  in the data frame (0 = disabled, 1 = enabled).
+                - ``measurement_mode``, ``measurement_channel``, ``current_range``,
+                  ``voltage_range`` (int): Frontend settings.
+                - ``counter_port``, ``reference_port``, ``working_sense_port``,
+                  ``working_port`` (int): Extension port channel selection
+                  (values depend on the connected module, e.g. MuxModule).
+                - ``dc_bias_enabled`` (bool): Whether to enable DC bias.
+                - ``bias_voltage_v`` (float): DC bias voltage in volts.
+                - ``sync_time_us`` (int): Time between two spectrum measurements
+                  in microseconds.
         """
 
         #get options and frontend settings from settings dictionary
@@ -413,21 +494,31 @@ class ISX3:
         
     def set_frequency_setup(self, current_setup): # config: ISX3DeviceConfig
         """
-        
-        Configures the measurement setup parameters for a single frequency point.
+        Configures the measurement setup for a single frequency point.
 
+        Resets the old setup, sends the frontend settings (``0xB0``) and adds
+        the frequency point with its extended options (EOPs) to the frequency
+        setup (``0xB6``).
 
         Args:
-            measurement_mode (int): Measurement mode (1=2-point, 2=4-point, 3=3-point).
-            measurement_channel (str): Measurement channel to use (e.g., "Main Port").
-            current_measurement_range (str): Current measurement range (e.g., "10mA").
-            voltage_measurement_range (str): Voltage measurement range (e.g., "1V").
-            frequency(float or str): Frequency for  measurement
-            precision (float): Measurement precision.
-            amplitude (str): Signal amplitude.
-            excitation_type (str): Type of excitation, "voltage" or "current".
-            point_delay_us (int) Punkt-Verzögerung zwischen Messpunkten in Mikrosekunden (EOP 0x01, uint32)
-            phase_sync (int) Phasensynchrones Umschalten (EOP 0x02): 0 = Inaktiv, 1 = Aktiv
+            current_setup (dict): One measurement setup from
+                :meth:`isx3_api.config_handler.ConfigBuilder.generate_measurement_queue`
+                with the keys:
+
+                - ``measurement_mode`` (int): Measurement mode (1 = 2-point,
+                  2 = 4-point, 3 = 3-point).
+                - ``measurement_channel`` (int): Measurement channel to use.
+                - ``current_range`` (int): Index of the current measurement range.
+                - ``voltage_range`` (int): Index of the voltage measurement range.
+                - ``frequency`` (float): Frequency of the measurement in Hz.
+                - ``precision`` (float): Measurement precision.
+                - ``amplitude`` (float): Signal amplitude.
+                - ``excitation_type`` (int): Type of excitation (EOP ``0x03``,
+                  only sent if not 1).
+                - ``point_delay_us`` (int): Delay between measurement points in
+                  microseconds (EOP ``0x01``, uint32).
+                - ``phase_sync`` (int): Phase synchronous switching
+                  (EOP ``0x02``): 0 = inactive, 1 = active.
         """
 
         #get settings from current_setup dictionary

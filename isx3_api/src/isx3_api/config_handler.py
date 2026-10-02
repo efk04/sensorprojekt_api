@@ -1,3 +1,14 @@
+"""
+Reading the measurement configuration (``config.ini``).
+
+This module contains:
+
+- dataclasses that represent the sections of the config file,
+- :class:`ConfigParser` for reading the config file into these dataclasses,
+- :class:`ConfigBuilder` for turning the config into a queue of measurement setups,
+- :func:`select_config_file` for choosing a config file via a file dialog.
+"""
+
 import configparser
 import numpy as np
 from dataclasses import asdict, dataclass
@@ -8,11 +19,33 @@ from dataclasses import asdict, dataclass
 
 @dataclass
 class ApiSettingsConfig:
+    """
+    Settings of the API itself (section ``[ApiSettings]``).
+
+    These settings are not sent to the device.
+
+    Attributes:
+        plot_type (str): Type of the live plot: ``"bode"``, ``"nyquist"`` or
+            ``"impedance_frequency"``. Unknown values fall back to ``"bode"``.
+        continuous_measurement (bool): If True, the measurement queue is repeated
+            until the user stops the measurement by pressing ``e``.
+    """
     plot_type: str
     continuous_measurement: bool
 
 @dataclass
 class ConnectionConfig:
+    """
+    Connection settings for the device (section ``[Connection]``).
+
+    Attributes:
+        interface_type (str): Interface used for the connection (e.g. ``"COM"``).
+        port (str): Serial port (e.g. ``"COM3"`` on Windows or ``"/dev/ttyUSB0"`` on Linux).
+        baudrate (int): Baud rate of the serial connection (e.g. ``115200``).
+        ip_address (str): IP address of the device (for a TCP connection).
+        tcp_port (int): TCP port of the device.
+        tcp_watchdog_interval_s (int): Watchdog interval of the TCP connection in seconds.
+    """
     interface_type: str
     port: str
     baudrate: int
@@ -22,11 +55,29 @@ class ConnectionConfig:
 
 @dataclass
 class OptionsConfig:
+    """
+    Output options of the measurement data frames (section ``[Options]``).
+
+    Attributes:
+        timestamp_mode (int): Timestamp in the data frame: 0 = disabled,
+            1 = ms timestamp (4 byte uint32), 2 = µs timestamp (5 byte uint56).
+        enable_current_range_output (bool): If True, the current range is sent
+            in every data frame.
+    """
     timestamp_mode: int
     enable_current_range_output: bool
 
 @dataclass
 class FrontendConfig:
+    """
+    Frontend settings of the device (section ``[Frontend]``, command ``0xB0``).
+
+    Attributes:
+        measurement_mode (int): Measurement mode (1 = 2-point, 2 = 4-point, 3 = 3-point).
+        measurement_channel (int): Measurement channel (e.g. 1 = main port).
+        current_range (int): Index of the current measurement range.
+        voltage_range (int): Index of the voltage measurement range.
+    """
     measurement_mode: int
     measurement_channel: int
     current_range: int
@@ -34,6 +85,17 @@ class FrontendConfig:
 
 @dataclass
 class ExtensionPortConfig:
+    """
+    Channel selection of the extension port (section ``[ExtensionPort]``, command ``0xB2``).
+
+    The values depend on the connected module (e.g. MuxModule).
+
+    Attributes:
+        counter_port (int): Port used as counter electrode.
+        reference_port (int): Port used as reference electrode.
+        working_sense_port (int): Port used as working sense electrode.
+        working_port (int): Port used as working electrode.
+    """
     counter_port: int
     reference_port: int
     working_sense_port: int
@@ -41,6 +103,25 @@ class ExtensionPortConfig:
 
 @dataclass
 class FrequencySetupConfig:
+    """
+    Frequency setup of the measurement (section ``[FrequencySetup]``, command ``0xB6``).
+
+    Attributes:
+        mode (str): ``"sweep"`` (frequencies from start to stop) or ``"single"``
+            (frequencies from :attr:`frequency_hz`).
+        frequency_hz (list[float]): Frequencies in Hz for ``"single"`` mode.
+            In the config file they are given as a comma separated list.
+        precision (float): Measurement precision.
+        start_frequency_hz (float): Start frequency in Hz for ``"sweep"`` mode.
+        stop_frequency_hz (float): Stop frequency in Hz for ``"sweep"`` mode.
+        count (int): Number of frequency points for ``"sweep"`` mode.
+        scale (str): Spacing of the sweep frequencies: ``"linear"`` or ``"logarithmic"``.
+        excitation_type (int): Type of excitation (1 = default, other values are
+            sent to the device as extended option ``0x03``).
+        amplitude (float): Amplitude of the excitation signal.
+        point_delay_us (int): Delay between frequency points in microseconds.
+        phase_sync (bool): Phase synchronous switching.
+    """
     mode: str
     frequency_hz: list[float]
     precision: float
@@ -55,20 +136,55 @@ class FrequencySetupConfig:
 
 @dataclass
 class DCBiasConfig:
+    """
+    DC bias settings (section ``[DCBias]``).
+
+    Attributes:
+        dc_bias_enabled (bool): If True, the DC bias is enabled.
+        bias_voltage_v (float): Bias voltage in volts (range: -1.0 V to +1.0 V).
+    """
     dc_bias_enabled: bool
     bias_voltage_v: float
 
 @dataclass
 class SyncTimeConfig:
+    """
+    Sync time settings (section ``[SyncTime]``, command ``0xB9``).
+
+    Attributes:
+        sync_time_us (int): Time between two spectrum measurements in microseconds (uint32).
+    """
     sync_time_us: int
 
 @dataclass
 class MeasurementConfig:
+    """
+    Measurement settings (section ``[Measurement]``).
+
+    Attributes:
+        number_of_spectra (int): Number of spectra (repetitions) measured per
+            frequency point. 0 starts a continuous measurement.
+    """
     number_of_spectra: int
 
-    
+
 @dataclass
 class DeviceConfig:
+    """
+    Complete device configuration, combines all config sections.
+
+    Created by :meth:`ConfigParser.parse`.
+
+    Attributes:
+        connection (ConnectionConfig): Section ``[Connection]``.
+        options (OptionsConfig): Section ``[Options]``.
+        frontend (FrontendConfig): Section ``[Frontend]``.
+        extension_port (ExtensionPortConfig): Section ``[ExtensionPort]``.
+        frequency_setup (FrequencySetupConfig): Section ``[FrequencySetup]``.
+        dc_bias (DCBiasConfig): Section ``[DCBias]``.
+        sync_time (SyncTimeConfig): Section ``[SyncTime]``.
+        measurement (MeasurementConfig): Section ``[Measurement]``.
+    """
     connection: ConnectionConfig
     options: OptionsConfig
     frontend: FrontendConfig
@@ -82,9 +198,19 @@ class DeviceConfig:
 
 class ConfigParser:
     """
-    Parser für die Sciospec ISX-3 / ISX-3mini Geräte-Konfigurationsdatei.
+    Parser for the Sciospec ISX-3 / ISX-3mini config file (INI format).
+
+    Missing sections or keys are replaced by default values.
+
+    Args:
+        file_path (str): Path to the config file.
+
+    Example:
+        >>> parser = ConfigParser("config/config.ini")
+        >>> config = parser.parse()
+        >>> port = config.connection.port
     """
-    
+
     def __init__(self, file_path: str):
         self.file_path = file_path
         self.parser = configparser.ConfigParser()
@@ -92,7 +218,15 @@ class ConfigParser:
         self.parser.optionxform = str 
         
     def parse(self) -> DeviceConfig:
-        """Liest die Datei ein und gibt ein typisiertes Konfigurationsobjekt zurück."""
+        """
+        Reads the config file and returns a typed config object.
+
+        Returns:
+            DeviceConfig: Device configuration with all sections.
+
+        Raises:
+            FileNotFoundError: If the config file cannot be found or read.
+        """
         # Lese die INI Datei
         if not self.parser.read(self.file_path, encoding='utf-8'):
             raise FileNotFoundError(f"Die Konfigurationsdatei '{self.file_path}' konnte nicht gefunden/gelesen werden.")
@@ -178,20 +312,21 @@ class ConfigParser:
         return MeasurementConfig(
             number_of_spectra=self.parser.getint(sec, 'number_of_spectra', fallback=1)
         )
-
-
-    def parse_as_dict(self) -> dict:
-        """Parses the config and returns a nested dictionary of all values."""
-        config_object = self.parse()
-        return asdict(config_object)
+    
 
     def parse_as_flat_dict(self, use_prefix: bool = False) -> dict:
         """
         Parses the config and returns a single-level (flattened) dictionary.
-        :param use_prefix: If True, keys become 'section_key' (e.g., 'connection_baudrate').
-                           If False, keys are left as-is (e.g., 'baudrate').
+
+        Args:
+            use_prefix (bool): If True, keys become ``section_key``
+                (e.g. ``connection_baudrate``). If False, keys are left as-is
+                (e.g. ``baudrate``).
+
+        Returns:
+            dict: All config values in one dictionary.
         """
-        nested_dict = self.parse_as_dict()
+        nested_dict =  asdict(self.parse())
         flat_dict = {}
         
         for section, values in nested_dict.items():
@@ -204,7 +339,17 @@ class ConfigParser:
 
 
     def parse_api_settings(self) -> ApiSettingsConfig:
-        """Liest nur die API-Einstellungen (nicht Teil der Gerätekonfiguration)."""
+        """
+        Reads only the API settings (section ``[ApiSettings]``).
+
+        The API settings are not part of the device configuration.
+
+        Returns:
+            ApiSettingsConfig: Plot type and continuous measurement flag.
+
+        Raises:
+            FileNotFoundError: If the config file cannot be found or read.
+        """
         if not self.parser.read(self.file_path, encoding='utf-8'):
             raise FileNotFoundError(f"Die Konfigurationsdatei '{self.file_path}' konnte nicht gefunden/gelesen werden.")
 
@@ -216,6 +361,22 @@ class ConfigParser:
 
 
 class ConfigBuilder:
+    """
+    Creates the measurement setups from the config file.
+
+    Every measurement setup is a dictionary with all settings for one
+    frequency point. The setups are executed one after another in the
+    measurement loop (see :meth:`isx3_api.measurement.Measurement.measurement`).
+
+    Args:
+        config_path (str): Path to the config file.
+
+    Attributes:
+        measurement_setup_queue (list[dict]): Measurement setups created by
+            :meth:`generate_measurement_queue`.
+        settings (dict): Flat dictionary with all settings from the config file.
+        parser (ConfigParser): Parser for the config file.
+    """
 
     def __init__(self, config_path: str = "config/config.ini"):
         self.measurement_setup_queue = []  #list of dictionarys to hold measurement setups
@@ -223,6 +384,12 @@ class ConfigBuilder:
         self.parser = ConfigParser(config_path)
 
     def get_settings_from_config(self):
+        """
+        Reads all settings from the config file.
+
+        Returns:
+            dict: Flat dictionary with all settings (keys without section prefix).
+        """
         #print("davor")
         config_settings = self.parser.parse_as_flat_dict(False)
         #print(config_settings)
@@ -231,6 +398,22 @@ class ConfigBuilder:
         
 
     def generate_measurement_queue(self):
+        """
+        Generates the queue of measurement setups (one setup per frequency point).
+
+        The frequency points depend on the frequency mode:
+
+        - ``"sweep"``: ``count`` frequencies from ``start_frequency_hz`` to
+          ``stop_frequency_hz``, with ``"linear"`` or ``"logarithmic"`` spacing.
+        - ``"single"``: the frequencies from ``frequency_hz``.
+
+        Each setup contains all device settings, the frequency of the point
+        (key ``"frequency"``) and a running ``"id"`` starting at 1.
+
+        Returns:
+            list[dict]: The measurement setups, also stored in
+            :attr:`measurement_setup_queue`.
+        """
         #generates a queue of measurement setups (self.measurement_setup_queue) to be executed in the measurement loop
 
         #reset queue so repeated calls don't accumulate stale setups from a previous run
@@ -293,7 +476,9 @@ def select_config_file() -> str | None:
     """
     Opens a file dialog to select the config.ini file for a measurement.
 
-    :return: path of the selected config file (None if the user cancelled the dialog).
+    Returns:
+        str | None: Path of the selected config file (None if the user
+        cancelled the dialog).
     """
     from tkinter import Tk, filedialog
 

@@ -26,6 +26,20 @@ extensions = [
     'sphinx.ext.napoleon',  # Google/NumPy-style docstrings
 ]
 
+# Third-party packages that are not installed on Read the Docs.
+# autodoc replaces them with mock objects, so the modules can be imported.
+autodoc_mock_imports = [
+    'serial',
+    'numpy',
+    'shapely',
+    'matplotlib',
+    'h5py',
+    'keyboard',
+]
+
+# Keep the order of members like in the source code
+autodoc_member_order = 'bysource'
+
 source_suffix = {
     '.rst': 'restructuredtext',
     '.md': 'markdown',

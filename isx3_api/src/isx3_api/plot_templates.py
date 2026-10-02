@@ -1,14 +1,28 @@
 """
-Class that contains plot templates for
-Impedanz-frequency-plot
-Nyquist-Plot
-Bode-Plot
+Class that contains plot templates for the live plot:
+
+- Impedance-frequency plot
+- Nyquist plot
+- Bode plot
 """
 #Imports
 import matplotlib.pyplot as plt
 import math
 
 class PlotTemplates:
+    """
+    Plot templates for the live plot of the measurement results.
+
+    The newest results are drawn in color, the results of the last
+    (up to 5) complete measurement cycles are drawn in gray.
+
+    All plot methods take the same arguments:
+
+    - ``live_results`` (dict): Newest results with the keys ``id``, ``real``,
+      ``imag`` and ``frequencies``.
+    - ``current_results`` (list[dict]): All results of the current measurement cycle.
+    - ``len_measurement_queue`` (int): Number of measurement setups per cycle.
+    """
 
     def __init__(self):
         #self.fig = plt.figure(figsize=(10,5))
@@ -32,6 +46,17 @@ class PlotTemplates:
 
 
     def processing_results(self, live_results, current_results, len_measurement_queue):
+        """
+        Prepares the live results and the past results for plotting.
+
+        When a measurement cycle is complete, it is added to the past results
+        (only the last 5 cycles are kept).
+
+        Args:
+            live_results (dict): Newest results (keys ``id``, ``real``, ``imag``, ``frequencies``).
+            current_results (list[dict]): All results of the current measurement cycle.
+            len_measurement_queue (int): Number of measurement setups per cycle.
+        """
         #process results liveplot
         self.freq_id = live_results["id"]
         self.real = live_results["real"]
@@ -74,6 +99,14 @@ class PlotTemplates:
 
 
     def impedance_frequency(self, live_results, current_results, len_measurement_queue):
+        """
+        Plots the real and imaginary part of the impedance over the frequency (log scale).
+
+        Args:
+            live_results (dict): Newest results (keys ``id``, ``real``, ``imag``, ``frequencies``).
+            current_results (list[dict]): All results of the current measurement cycle.
+            len_measurement_queue (int): Number of measurement setups per cycle.
+        """
 
         #get processed data
         self.processing_results(live_results = live_results, current_results = current_results, len_measurement_queue = len_measurement_queue)
@@ -111,6 +144,14 @@ class PlotTemplates:
        
     
     def nyquist(self, live_results, current_results, len_measurement_queue):
+        """
+        Plots a Nyquist plot (imaginary part over real part, equal axis scaling).
+
+        Args:
+            live_results (dict): Newest results (keys ``id``, ``real``, ``imag``, ``frequencies``).
+            current_results (list[dict]): All results of the current measurement cycle.
+            len_measurement_queue (int): Number of measurement setups per cycle.
+        """
 
         #get processed data
         self.processing_results( live_results = live_results, current_results = current_results, len_measurement_queue = len_measurement_queue)
@@ -154,7 +195,15 @@ class PlotTemplates:
     def bode(self, live_results, current_results, len_measurement_queue):
         """
         Create or update a Bode plot (magnitude + phase) on one figure
-        with two parallel y-axes (twinx)
+        with two parallel y-axes (twinx).
+
+        Magnitude :math:`|Z|` and phase :math:`\\phi` are calculated from the
+        real and imaginary part.
+
+        Args:
+            live_results (dict): Newest results (keys ``id``, ``real``, ``imag``, ``frequencies``).
+            current_results (list[dict]): All results of the current measurement cycle.
+            len_measurement_queue (int): Number of measurement setups per cycle.
         """
         #get processed data
         self.processing_results(live_results = live_results, current_results = current_results, len_measurement_queue = len_measurement_queue)

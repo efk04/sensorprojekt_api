@@ -1,5 +1,6 @@
 """
 Measurement class for:
+
 - initializing the measurement process
 - starting liveplot
 - saving the measurement configuration and results to an HDF5 file
@@ -19,6 +20,27 @@ from .plot_templates import PlotTemplates
 from .config_handler import ConfigBuilder, select_config_file
 
 class Measurement:
+    """
+    Runs a complete measurement campaign with the ISX-3.
+
+    Connects to the device, executes all measurement setups from the config
+    file, shows a live plot and saves the config and results in an HDF5 file
+    in the folder ``measurements/``.
+
+    Example:
+        >>> from isx3_api import Measurement
+        >>> Measurement().measurement("config/config.ini")
+
+    Attributes:
+        device (ISX3): Device handler for the ISX-3.
+        config_builder (ConfigBuilder): Creates the measurement setups from the config file.
+        plot_templates (PlotTemplates): Live plot templates.
+        plot_type (str): Type of the live plot (from the API settings).
+        measurement_settings (dict): All settings from the config file.
+        current_results (list[dict]): Results of the current measurement cycle.
+        manual_stop (bool): True if the user stopped the measurement by pressing ``e``.
+        filename (str): Name of the HDF5 file (set by :meth:`create_h5_file`).
+    """
 
     def __init__(self):
         
@@ -55,6 +77,19 @@ class Measurement:
 
 
     def start_measurement(self, current_setup, measurement_settings):
+        """
+        Starts the measurement for one measurement setup and reads the results.
+
+        Args:
+            current_setup (dict): Measurement setup (uses the keys
+                ``number_of_spectra``, ``id`` and ``frequency``).
+            measurement_settings (dict): All measurement settings from the config file.
+
+        Returns:
+            tuple[dict, float]: The results (see
+            :meth:`isx3_api.commands.ISX3.read_measurement_data`) and the time
+            (``time.time()``) when the results were received.
+        """
         #start measurment via other library
         #give back data to self.measurment_data
         number_of_spectra = current_setup["number_of_spectra"] #spectra counts the measurement repetitions
@@ -85,6 +120,11 @@ class Measurement:
         return results, timestamp_measurement
 
     def create_h5_file(self):
+        """
+        Creates a new, empty HDF5 file for the whole measurement campaign.
+
+        The file is saved as ``measurements/measurement_results_<YYYYmmdd-HHMMSS>.h5``.
+        """
         #creates a new H5 file for the whole measurement campaign, and saves the data in H5 format under "measurements"
         current_date = datetime.now().strftime("%Y%m%d-%H%M%S")
         self.filename = f"measurement_results_{current_date}.h5"
@@ -95,6 +135,21 @@ class Measurement:
 
         
     def safe_measurement_settings(self, config_path):
+        """
+        Saves the whole config file in the HDF5 file before the measurement.
+
+        Structure: ``Configuration/<Section>`` (group) with one attribute per
+        key (raw string from the INI file). Comments are not saved.
+
+        Args:
+            config_path (str): Path to the config file.
+
+        Returns:
+            h5py.File: The (closed) HDF5 file.
+
+        Raises:
+            FileNotFoundError: If the config file cannot be read.
+        """
         #saves the whole config file in the h5 file before the measurement
         #structure: Configuration/<Section> (group) -> <key> = "<value>" (attribute, raw string from the ini file)
         #comments are not saved, the config can be recreated with extract_config_from_hdf()
@@ -120,6 +175,24 @@ class Measurement:
 
 
     def safe_measurment(self, results, current_setup, icm):
+        """
+        Saves the results of one measurement setup in the HDF5 file.
+
+        Creates the group ``Measurement_<icm>.<id>`` with the datasets
+        ``timestamp``, ``frequency``, ``frequency_id``, ``real_part`` and
+        ``imaginary_part``.
+
+        Args:
+            results (tuple[dict, float]): Results and timestamp from :meth:`start_measurement`.
+            current_setup (dict): The measurement setup of the results.
+            icm (int): Number of the measurement cycle (for continuous measurements).
+
+        Returns:
+            h5py.File: The (closed) HDF5 file.
+
+        Raises:
+            ValueError: If there are no results.
+        """
         #defines H5 filename and saves measurement settings and the measurement results in H5 format via h5py (1 group per measurement repetition)
        
         current_id = str(icm)+"."+str(current_setup["id"])
@@ -153,6 +226,18 @@ class Measurement:
 
 
     def update_live_plot(self, results, current_setup, current_results, len_measurement_queue):
+        """
+        Updates the live plot with new data.
+
+        The plot template is chosen by :attr:`plot_type` (``"bode"``,
+        ``"nyquist"`` or ``"impedance_frequency"``).
+
+        Args:
+            results (tuple[dict, float]): Results and timestamp from :meth:`start_measurement`.
+            current_setup (dict): The measurement setup of the results.
+            current_results (list[dict]): All results of the current measurement cycle.
+            len_measurement_queue (int): Number of measurement setups per cycle.
+        """
         #update and scale live plot with new data
         res = results[0]
         
@@ -173,6 +258,27 @@ class Measurement:
 
     #Methode for main loop
     def measurement(self, config_path: str | None = None):
+        """
+        Runs the complete measurement (main loop).
+
+        Steps:
+
+        1. Create the HDF5 file for the measurement campaign.
+        2. Read the API settings (plot type, continuous measurement).
+        3. Connect to the device and save the config in the HDF5 file.
+        4. Send the options to the device and create the measurement queue.
+        5. For every measurement setup: send the frequency setup, measure,
+           update the live plot and save the results.
+        6. Repeat step 5 if ``continuous_measurement`` is enabled, until the
+           user presses ``e``.
+
+        Args:
+            config_path (str | None): Path to the config file. If None, a file
+                dialog asks for it.
+
+        Returns:
+            bool | None: True if the measurement was stopped manually, otherwise None.
+        """
         # config_path: path to the config.ini file. If None, a file dialog asks for it.
         # 0 create H5 file for the entire measurement campaign, with timestamp in filename
         # 1 connect to device (only once at the beginning of the measurment)
