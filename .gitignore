@@ -3,11 +3,13 @@ __pycache__/
 isx3.venv/
 measurements/
 isx3_api.egg-info/
+_build/
 
 #datatype
 *.h5
 *.png
 *.ini
+
 
 #files
 test_config.py
