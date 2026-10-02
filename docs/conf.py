@@ -24,7 +24,16 @@ extensions = [
     'myst_parser',          # Markdown (.md) pages
     'sphinx.ext.autodoc',   # API docs from docstrings
     'sphinx.ext.napoleon',  # Google/NumPy-style docstrings
+    'sphinx.ext.viewcode',  # "[source]" links to the highlighted source code
 ]
+
+# Markdown extensions: ::: fences for admonitions, definition lists
+myst_enable_extensions = [
+    'colon_fence',
+    'deflist',
+]
+# Create anchors for headings up to level 3 (for links like page.md#section)
+myst_heading_anchors = 3
 
 # Third-party packages that are not installed on Read the Docs.
 # autodoc replaces them with mock objects, so the modules can be imported.
@@ -40,6 +49,12 @@ autodoc_mock_imports = [
 # Keep the order of members like in the source code
 autodoc_member_order = 'bysource'
 
+# Show type hints in the parameter description instead of the signature
+autodoc_typehints = 'description'
+
+# Show "Attributes" as a field list (like "Parameters") instead of separate entries
+napoleon_use_ivar = True
+
 source_suffix = {
     '.rst': 'restructuredtext',
     '.md': 'markdown',
@@ -53,5 +68,12 @@ language = 'de'
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
-html_theme = 'alabaster'
+html_theme = 'sphinx_rtd_theme'
 html_static_path = ['_static']
+html_title = 'isx3_api documentation'
+
+html_theme_options = {
+    'navigation_depth': 3,          # show page sections in the sidebar
+    'collapse_navigation': False,   # keep the sidebar tree expanded
+    'sticky_navigation': True,      # sidebar scrolls with the page
+}
