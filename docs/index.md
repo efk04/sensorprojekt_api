@@ -2,10 +2,9 @@
 
 Python API for controlling the Sciospec ISX-3 impedance analyzer.
 
-```{toctree}
+{toctree}
 :maxdepth: 2
 
 installation
 quickstart
 api
-```
