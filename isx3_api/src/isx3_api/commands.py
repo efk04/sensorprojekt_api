@@ -393,13 +393,13 @@ class ISX3:
         """
         self.device.reset_input_buffer()
         
-        # Step 1: Get IP Command senden
+        #Get IP Command senden
         request = bytearray([0xBE, 0x01, 0x01, 0xBE])
         self.device.write(request)
         print("→ Get IP gesendet:", request.hex())
         
-        # Step 2: Response lesen (9 Bytes erwartet)
-        response = self.device.read(12)  # Etwas mehr für Sicherheit
+        #read response
+        response = self.device.read(12)  
         
         # IP extrahieren (Bytes 3-6)
         ip_bytes = response[3:7]
@@ -428,8 +428,6 @@ class ISX3:
                   2 = µs timestamp (5 byte uint56).
                 - ``enable_current_range_output`` (int): Send the current range
                   in the data frame (0 = disabled, 1 = enabled).
-                - ``measurement_mode``, ``measurement_channel``, ``current_range``,
-                  ``voltage_range`` (int): Frontend settings.
                 - ``counter_port``, ``reference_port``, ``working_sense_port``,
                   ``working_port`` (int): Extension port channel selection
                   (values depend on the connected module, e.g. MuxModule).
@@ -442,10 +440,7 @@ class ISX3:
         #get options and frontend settings from settings dictionary
         timestamp_mode = settings["timestamp_mode"] # Zeitstempel im Datenframe aktivieren: 0 = Deaktiviert, 1 = ms-Zeitstempel (4 Byte uint32), 2 = µs-Zeitstempel (5 Byte uint56)
         enable_current_range_output = settings["enable_current_range_output"] #Strommessbereich im          
-        measurement_mode=settings["measurement_mode"]
-        measurement_channel=settings["measurement_channel"]
-        current_range=settings["current_range"]
-        voltage_range=settings["voltage_range"]
+        #Extension Port settings (not used/working yet)
         counter_port=settings["counter_port"]
         reference_port=settings["reference_port"]
         working_sense_port=settings["working_sense_port"]
@@ -454,7 +449,6 @@ class ISX3:
         bias_voltage_v=settings["bias_voltage_v"]
         sync_time_us=settings["sync_time_us"]
 
-        #print("Übertrage Options...")
         
         if timestamp_mode == 1:
             self._send_command(0x97, bytes([0x01, 0x01])) # Enable ms[cite: 2]
@@ -469,7 +463,7 @@ class ISX3:
 
         
         
-        # 3. Extension Port (0xB2)[cite: 2] - not used yet
+        # Extension Port (0xB2)[cite: 2] - not used/working yet
         """
         print("Übertrage Extension Port-Settings...")
         ext_payload = struct.pack('>BBBB',
@@ -479,15 +473,15 @@ class ISX3:
                                     working_port)
         self._send_command(0xB2, ext_payload) #[cite: 2]
         """
-        # 4. DC Bias (0xB6 0x33 / 0x30)[cite: 2]
-        #print("Übertrage DC Bias...")
+        # DC Bias (0xB6 0x33 / 0x30)[cite: 2]
+        
         # Value setzen
         bias_payload = bytes([0x33]) + struct.pack('>f', bias_voltage_v) #[cite: 2]
         self._send_command(0xB6, bias_payload) #[cite: 2]
         # Aktivieren/Deaktivieren
         self._send_command(0xB6, bytes([0x30, 1 if dc_bias_enabled else 0])) #[cite: 2]
         
-        # 5. Sync Time (0xB9)[cite: 2]
+        # Sync Time (0xB9)[cite: 2]
         #print("Übertrage Sync Time...")
         sync_payload = struct.pack('>I', sync_time_us) #[cite: 2]
         self._send_command(0xB9, sync_payload) #[cite: 2]
@@ -504,7 +498,7 @@ class ISX3:
             current_setup (dict): One measurement setup from
                 :meth:`isx3_api.config_handler.ConfigBuilder.generate_measurement_queue`
                 with the keys:
-
+                    
                 - ``measurement_mode`` (int): Measurement mode (1 = 2-point,
                   2 = 4-point, 3 = 3-point).
                 - ``measurement_channel`` (int): Measurement channel to use.
@@ -522,10 +516,12 @@ class ISX3:
         """
 
         #get settings from current_setup dictionary
+        #Frontend Settings:
         measurement_mode=current_setup["measurement_mode"]
         measurement_channel=current_setup["measurement_channel"]
         current_range=current_setup["current_range"]
         voltage_range=current_setup["voltage_range"]
+        #Frequency Settings
         frequency = current_setup["frequency"]  #frequency (float): Frequency point for single frequency measurement
         precision = current_setup["precision"] #precision (float): Measurement precision
         amplitude = current_setup["amplitude"] #amplitude (float): Signal amplitude
@@ -543,7 +539,6 @@ class ISX3:
         #1 Frontend (0xB0)[cite: 2]
         #print("Übertrage Frontend-Settings...")
         # Clear old frontend settings to avoid overflow
-        #cmd_tag = 0xB0 # CT -> Set FE Settings
         data = bytes([0xFF, 0xFF, 0xFF])  
         self._send_command(0xB0, data = data)
         # Sende neue Frontend-Settings (Mode, Channel, C-Range, V-Range)

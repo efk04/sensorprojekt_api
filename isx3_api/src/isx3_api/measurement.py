@@ -71,7 +71,7 @@ class Measurement:
 
 
         #self.ISX3_T = ISX3Transmitter() 
-        #start liveplot (evtl. später noch abfragen ob liveplot gewünscht ist)
+        #start liveplot 
         plt.ion() #interactive mode on
         plt.rcParams['keymap.quit'] = [] # deactivates the command q for refreshing plot
 
@@ -99,11 +99,10 @@ class Measurement:
             print("Device not connected.")
             return None, None
 
-        expected_results = number_of_spectra * 1
 
         #print(f"Starts the measuring for {number_of_spectra} Cycles...")
 
-        #starts the measuring and Reads the Data
+        #starts the measuring and reads the results via other library (commands.py
         results = self.device.start_measurement(spectra=number_of_spectra, id = id, measurement_settings = measurement_settings)
         timestamp_measurement = None
 
@@ -185,7 +184,7 @@ class Measurement:
         Args:
             results (tuple[dict, float]): Results and timestamp from :meth:`start_measurement`.
             current_setup (dict): The measurement setup of the results.
-            icm (int): Number of the measurement cycle (for continuous measurements).
+            icm (int): index-number of the measurement cycle (for continuous measurements).
 
         Returns:
             h5py.File: The (closed) HDF5 file.
@@ -196,8 +195,8 @@ class Measurement:
         #defines H5 filename and saves measurement settings and the measurement results in H5 format via h5py (1 group per measurement repetition)
        
         current_id = str(icm)+"."+str(current_setup["id"])
-        ts = results[1]
-        res = results[0]
+        ts = results[1]#timestamp
+        res = results[0]#results
         
         if  not res:
             raise ValueError("no results")
@@ -241,9 +240,6 @@ class Measurement:
         #update and scale live plot with new data
         res = results[0]
         
-        frequency = [current_setup["frequency"]]*len(res["id"]) #spectra
-        
-
 
         match self.plot_type:
             case "impedance_frequency":
@@ -302,7 +298,7 @@ class Measurement:
         #creates a new H5 file for the whole measurement campaign, and saves the data in H5 format under "measurements"
         self.create_h5_file()
 
-        # 2
+        #select plot type
         self.plot_type = self.config_builder.parser.parse_api_settings().plot_type
 
         #get the measurement config as dictionary
@@ -314,7 +310,7 @@ class Measurement:
         #saves the whole config file as a group in the h5-file
         self.safe_measurement_settings(config_path = config_path)
         
-        #load measurment settings (Options, frontend settings, Extension port settings, DC bias, SyncTime ) in device 
+        #load measurment settings (Options, (Extension port settings), DC bias, SyncTime ) in device 
         self.device.set_options(settings=self.measurement_settings)
 
 
@@ -366,14 +362,14 @@ class Measurement:
                     return self.manual_stop
 
 
-            #if "time_of_continuous_measurement" = 0 run only one measurement cycle
+            #if "continuos_measurement" = False run only one measurement cycle
             if self.config_builder.parser.parse_api_settings().continuous_measurement == False:
                 break
 
 
 
         print('\n----- finished all measurements -----')
-        #serial_connection.close()
+        serial_connection.close()
 
         #after finishing measurement loop, keep the plot open for further analysis, until user closes it
         plt.ioff() #interactive mode off

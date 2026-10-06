@@ -25,7 +25,6 @@ class PlotTemplates:
     """
 
     def __init__(self):
-        #self.fig = plt.figure(figsize=(10,5))
         self.fig = None
         self.ax1 = None
         self.ax2 = None
@@ -80,10 +79,9 @@ class PlotTemplates:
                 self.past_frequencies = []
 
                 for sublist in self.past_results:
-                # Durchlaufe jedes Dictionary in der Unterliste
+                # read evry dict in the sublist and extend the corresponding lists
                     for item in sublist:
-                        # Da die Werte selbst Listen sind, nutzen wir .extend() 
-                        # (oder .append(), falls es immer nur ein einzelner Wert ist)
+
                         if 'id' in item:
                             self.past_id.extend(item['id'])
                         if 'real' in item:
