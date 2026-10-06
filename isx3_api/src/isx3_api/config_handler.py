@@ -383,20 +383,6 @@ class ConfigBuilder:
         self.settings = {} # empty dictionary to hold measurement settings from user
         self.parser = ConfigParser(config_path)
 
-    def get_settings_from_config(self):
-        """
-        Reads all settings from the config file.
-
-        Returns:
-            dict: Flat dictionary with all settings (keys without section prefix).
-        """
-        #print("davor")
-        config_settings = self.parser.parse_as_flat_dict(False)
-        #print(config_settings)
-        #print("danach")
-        return config_settings
-        
-
     def generate_measurement_queue(self):
         """
         Generates the queue of measurement setups (one setup per frequency point).
@@ -416,7 +402,7 @@ class ConfigBuilder:
         """
         #generates a queue of measurement setups (self.measurement_setup_queue) to be executed in the measurement loop
 
-        #reset queue so repeated calls don't accumulate stale setups from a previous run
+        #reset queue 
         self.measurement_setup_queue = []
 
         #self.settings = self.get_temp_test_settings() #uses temp test_settings
@@ -425,15 +411,15 @@ class ConfigBuilder:
 
         #frequency_queue_hz = [self.settings["frequency_hz"]]
         match self.settings["mode"]:
-            case "auto":
+            case "auto": #turns the "auto"/"sweep" options in a list of frequencies
                 if self.settings["scale"] == "linear":
                     frequency_queue_hz = np.linspace(self.settings["start_frequency_hz"], self.settings["stop_frequency_hz"], self.settings["count"]).tolist()
                 elif self.settings["scale"] == "logarithmic":
                     frequency_queue_hz = np.logspace(np.log10(self.settings["start_frequency_hz"]), np.log10(self.settings["stop_frequency_hz"]), self.settings["count"]).tolist()
-            case "user_defined":
+            case "user_defined": #gets user defiend list of frequencies
                 frequency_queue_hz = self.settings["frequency_hz"]
 
-        
+        #create single setup dict for each frequency and append it to the queue
         for index, freq in enumerate(frequency_queue_hz): 
             #first setup id is 1
             setup_id = index + 1
