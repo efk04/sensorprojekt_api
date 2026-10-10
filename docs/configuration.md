@@ -5,6 +5,8 @@ replaced by default values (see {class}`~isx3_api.config_handler.ConfigParser`).
 
 An example file can be found at `isx3_api/tests/config_example.ini`.
 
+The path to the configuration file is passed as an argument to the measurement function. If no path is specified, the function prompts for one via a file dialog.
+
 ## [ApiSettings]
 
 Settings of the API itself. They are not sent to the device.
