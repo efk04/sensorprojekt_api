@@ -1,17 +1,19 @@
 # Measuring
 
-In this part we want to explain what options there are for setting the measuring frequencies. And how the continius measurment works.
+This section explains the options for setting the measurement frequencies and how continuous measurement works.
 
-##  FrequencySetup - mode
-In the config file in the `[FrequencySetup]` part you have the option `mode`. Here you can choose between `auto` and `user_defined`.
+## FrequencySetup - mode
 
-The `auto` mode uses the values from `start_frequency_hz`, `stop_frequency_hz`, `count` and `scale` to generate a list of frequencies at wich to measure.
+In the `[FrequencySetup]` section of the config file, the `mode` option lets you choose between `auto` and `user_defined`.
 
-The `user-defined` mode uses the values from `frequency_hz`. The user can give here on frequency at which to measure. It is also possible to give a list of comma seperated values like:
+The `auto` mode uses the values of `start_frequency_hz`, `stop_frequency_hz`, `count`, and `scale` to generate a list of frequencies at which to measure.
+
+The `user_defined` mode uses the value of `frequency_hz`. Here you can specify a single frequency at which to measure. You can also provide a comma-separated list of values, for example:
 
 ```python
-frequency_hz 67.0, 69.0, 420.0
+frequency_hz = 67.0, 69.0, 420.0
 ```
 
-## Continius Measuring
-In the `[Measurement]` section in the config file the user can set the `number_of_spectra`. This defines how often the frequency list is run back to back. If this value is set to `0` the measurement is coninuous. In this scenario it will measure until the user stops it manually.
+## Continuous Measuring
+
+In the `[Measurement]` section of the config file, you can set `number_of_spectra`. This defines how many times the frequency list is run back to back. If this value is set to `0`, the measurement is continuous and runs until you stop it manually.
