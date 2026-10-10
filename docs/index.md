@@ -38,6 +38,7 @@ quickstart
 :caption: Content
 
 configuration
+measuring
 data_format
 api/index
 ```

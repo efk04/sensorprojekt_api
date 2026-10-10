@@ -73,7 +73,7 @@ Frequency setup (command `0xB6`).
 
 | Key | Default | Description |
 |---|---|---|
-| `mode` | `auto` | `user_defined` (frequencies from `frequency_hz`) or `user_defined` |
+| `mode` | `auto` | `user_defined` (frequencies from `frequency_hz`) or `auto` |
 | `frequency_hz` | `1000.0` | Comma separated list of frequencies in Hz (`single` mode) |
 | `start_frequency_hz` | `100.0` | Start frequency in Hz (`auto` mode) |
 | `stop_frequency_hz` | `100000.0` | Stop frequency in Hz (`auto` mode) |
