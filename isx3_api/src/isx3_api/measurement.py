@@ -1,274 +1,346 @@
 """
-Measurement class for:
-- initializing the measurement process
-- starting liveplot
-- saving the measurement configuration and results to an HDF5 file
+measurement.py - Zentraler Messungs-Orchestrator für das Sciospec ISX-3.
+
+Koordiniert das Laden der Konfiguration, die Initialisierung der Hardware,
+die Abarbeitung der Frequenz-Messpunkte, das MUX32-Routing, die optionale
+Open-Kompensation, das HDF5-Logging sowie die Live-Plots.
 """
 
-#Imports
 from datetime import datetime
-import time
-import matplotlib.pyplot as plt
-import h5py
-import configparser
 import os
-import keyboard
+import time
+import configparser
+import h5py
+import matplotlib.pyplot as plt
 
 from .commands import ISX3
-from .plot_templates import PlotTemplates
+from .compensation import ImpedanceCompensator
 from .config_handler import ConfigBuilder, select_config_file
+from .plot_templates import PlotTemplates
+
 
 class Measurement:
+    """Steuert den gesamten Ablauf einer Impedanz-Messkampagne."""
 
     def __init__(self):
-        
-        # Initializes an ISX3 device handler.
-        
-        self.serial_protocol = None
-        self.device = None
-        self.frequency_points = 0
-        self.ret_hex_int = None
-        self.print_msg = True
-        self.tcp_protocol = None
-        self.frequencies = []
-        self.manual_stop = False
-        self.current_results = []
-
-
-        self.h5_filename = '' #filename of the h5-file
-        self.plot_type = ''
-        self.measurement_settings = {} # dictonary for all measurements settings from user
-        self.measurement_setup_queue = []  # List to hold measurement setups
-        self.results = []  # List to hold measurement data
-        
-        
-        #include other librarys
+        """Initialisiert die Treiber, Hilfsobjekte und Speicherstrukturen."""
         self.device = ISX3()
-        self.config_builder = ConfigBuilder()
+        self.compensator = ImpedanceCompensator()
+        self.config_builder: ConfigBuilder | None = None
         self.plot_templates = PlotTemplates()
 
+        self.filename: str = ""
+        self.plot_type: str = "bode"
+        self.measurement_settings: dict = {}
+        self.current_results: list[dict] = []
+        self.manual_stop: bool = False
 
-        #self.ISX3_T = ISX3Transmitter() 
-        #start liveplot (evtl. später noch abfragen ob liveplot gewünscht ist)
-        plt.ion() #interactive mode on
-        plt.rcParams['keymap.quit'] = [] # deactivates the command q for refreshing plot
+        plt.ion()
+        plt.rcParams["keymap.quit"] = []
 
-
-    def start_measurement(self, current_setup, measurement_settings):
-        #start measurment via other library
-        #give back data to self.measurment_data
-        number_of_spectra = current_setup["number_of_spectra"] #spectra counts the measurement repetitions
-        id = current_setup["id"]
-
-        if not self.device:
-            print("Device not connected.")
-            return None, None
-
-        expected_results = number_of_spectra * 1
-
-        #print(f"Starts the measuring for {number_of_spectra} Cycles...")
-
-        #starts the measuring and Reads the Data
-        results = self.device.start_measurement(spectra=number_of_spectra, id = id, measurement_settings = measurement_settings)
-        timestamp_measurement = None
-
-        if results is None:
-            print (f"No Results for measurement Nr.{id}.")
-        else:
-            timestamp_measurement = time.time() #gets timestamp when results are recieved in us (microsecs)
-            #print(f"Results for Measurement Nr. {id}:", results) #debug
-
-        #include frequency as list in results
-        frequency = [current_setup["frequency"]]*len(results["id"]) #spectra
-        results["frequencies"].append(frequency)
-
-        return results, timestamp_measurement
-
-    def create_h5_file(self):
-        #creates a new H5 file for the whole measurement campaign, and saves the data in H5 format under "measurements"
-        current_date = datetime.now().strftime("%Y%m%d-%H%M%S")
-        self.filename = f"measurement_results_{current_date}.h5"
+    def create_h5_file(self) -> str:
+        """Erstellt eine neue HDF5-Datei im Ordner 'measurements' mit Zeitstempel im Namen."""
         os.makedirs("measurements", exist_ok=True)
-        with h5py.File(f"measurements/{self.filename}", 'w'):
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        self.filename = f"measurement_results_{timestamp}.h5"
+        full_path = os.path.join("measurements", self.filename)
+
+        with h5py.File(full_path, "w"):
             pass
-        print(f"Creates Measurement-File: {self.filename}")
 
-        
-    def safe_measurement_settings(self, config_path):
-        #saves the whole config file in the h5 file before the measurement
-        #structure: Configuration/<Section> (group) -> <key> = "<value>" (attribute, raw string from the ini file)
-        #comments are not saved, the config can be recreated with extract_config_from_hdf()
+        print(f"[OK] HDF5-Messdatei erstellt: {full_path}")
+        return full_path
 
+    def save_measurement_settings(self, config_path: str) -> None:
+        """Sichert die komplette Konfigurationsdatei als Metadaten in der HDF5-Datei."""
         group_name = "Configuration"
-
-        #read the config file without interpolation so every value is saved exactly as written
         ini = configparser.ConfigParser(interpolation=None)
-        ini.optionxform = str #keep the case of the keys
-        if not ini.read(config_path, encoding='utf-8'):
-            raise FileNotFoundError(f"The config file '{config_path}' could not be read.")
+        ini.optionxform = str
 
-        with h5py.File(f"measurements/{self.filename}", 'a') as f:
-            #track_order keeps the order of sections and keys like in the config file
-            group = f.create_group(group_name, track_order=True)
-            group.attrs["source_file"] = os.path.basename(config_path)
+        if not ini.read(config_path, encoding="utf-8"):
+            raise FileNotFoundError(f"Konfigurationsdatei '{config_path}' konnte nicht gelesen werden.")
+
+        full_path = os.path.join("measurements", self.filename)
+        with h5py.File(full_path, "a") as h5_file:
+            config_group = h5_file.create_group(group_name, track_order=True)
+            config_group.attrs["source_file"] = os.path.basename(config_path)
 
             for section in ini.sections():
-                section_group = group.create_group(section, track_order=True)
+                section_group = config_group.create_group(section, track_order=True)
                 for key, value in ini.items(section, raw=True):
-                    section_group.attrs[key] = value
-        return f
+                    section_group.attrs[key] = str(value)
 
+    safe_measurement_settings = save_measurement_settings
 
-    def safe_measurment(self, results, current_setup, icm):
-        #defines H5 filename and saves measurement settings and the measurement results in H5 format via h5py (1 group per measurement repetition)
-       
-        current_id = str(icm)+"."+str(current_setup["id"])
-        ts = results[1]
-        res = results[0]
-        
-        if  not res:
-            raise ValueError("no results")
-        
-        #creates groupnames with the id -> Number of measurement
-        group_name = f"Measurement_{current_id}"
+    def save_measurement(
+        self,
+        results_data: dict,
+        timestamp: float,
+        current_setup: dict,
+        icm: int,
+        sensor_idx: int = 0,
+    ) -> None:
+        """Speichert das Ergebnis eines Frequenzschritts in einer HDF5-Gruppe."""
+        if not results_data.get("id"):
+            raise ValueError("Keine gültigen Messdaten zum Speichern vorhanden.")
 
-        with h5py.File(f"measurements/{self.filename}", 'a') as f:
+        current_id = f"{icm}.{current_setup['id']}"
+        if sensor_idx > 0:
+            group_name = f"Sensor_{sensor_idx}/Measurement_{current_id}"
+        else:
+            group_name = f"Measurement_{current_id}"
 
-            group = f.create_group(group_name)
+        full_path = os.path.join("measurements", self.filename)
 
-            #measurement results
-            group.create_dataset("timestamp", data = ts)
-            group.create_dataset("frequency", data = current_setup["frequency"]) #single frequency 
-            group.create_dataset("frequency_id", data=res["id"]) #counts number of measurements with one frequency
-            group.create_dataset("real_part", data=res["real"])
-            group.create_dataset("imaginary_part", data=res["imag"])
+        with h5py.File(full_path, "a") as h5_file:
+            group = h5_file.require_group(group_name)
 
+            group.create_dataset("timestamp", data=timestamp)
+            group.create_dataset("frequency", data=float(current_setup["frequency"]))
+            group.create_dataset("frequency_id", data=results_data["id"])
+            group.create_dataset("real_part", data=results_data["real"])
+            group.create_dataset("imaginary_part", data=results_data["imag"])
+
+            # Rohdaten mitspeichern, falls Kompensation aktiv war
+            if "real_raw" in results_data and "imag_raw" in results_data:
+                group.create_dataset("real_part_raw", data=results_data["real_raw"])
+                group.create_dataset("imaginary_part_raw", data=results_data["imag_raw"])
+
+            if any(results_data.get("current_range", [])):
+                group.create_dataset("current_range", data=[r for r in results_data["current_range"] if r is not None])
 
             group.attrs["created"] = datetime.now().isoformat()
 
-        #print(f"Measurement Nr. {id} was saved in h5 file: {self.filename}")
+    safe_measurment = lambda self, results, setup, icm: self.save_measurement(results[0], results[1], setup, icm)
 
-        return f
-        
+    def start_single_step(
+        self, current_setup: dict, measurement_settings: dict
+    ) -> tuple[dict, float]:
+        """Führt die Messung für einen einzelnen Frequenzschritt aus."""
+        self.device.set_frequency_setup(current_setup)
 
+        number_of_spectra = current_setup["number_of_spectra"]
+        step_id = current_setup["id"]
 
-    def update_live_plot(self, results, current_setup, current_results, len_measurement_queue):
-        #update and scale live plot with new data
-        res = results[0]
-        
-        frequency = [current_setup["frequency"]]*len(res["id"]) #spectra
-        
+        results = self.device.start_measurement(
+            spectra=number_of_spectra,
+            id=step_id,
+            measurement_settings=measurement_settings,
+        )
+        timestamp = time.time()
 
+        freq_value = current_setup["frequency"]
+        num_points = len(results.get("id", []))
+        results["frequencies"] = [freq_value] * num_points
 
+        return results, timestamp
+
+    def update_live_plot(self, results: dict, current_setup: dict, current_results: list[dict], len_queue: int) -> None:
+        """Aktualisiert die grafische Live-Anzeige."""
         match self.plot_type:
             case "impedance_frequency":
-                self.plot_templates.impedance_frequency(live_results = res, current_results = current_results, len_measurement_queue = len_measurement_queue)
+                self.plot_templates.impedance_frequency(results, current_results, len_queue)
             case "nyquist":
-                self.plot_templates.nyquist(live_results = res, current_results = current_results, len_measurement_queue = len_measurement_queue)
-            case _:   # "bode" und alle unbekannten Werte
-                self.plot_templates.bode(live_results = res, current_results = current_results, len_measurement_queue = len_measurement_queue)
+                self.plot_templates.nyquist(results, current_results, len_queue)
+            case _:
+                self.plot_templates.bode(results, current_results, len_queue)
 
-        plt.pause(0.1)#short break
+        plt.pause(0.01)
 
-
-    #Methode for main loop
-    def measurement(self, config_path: str | None = None):
-        # config_path: path to the config.ini file. If None, a file dialog asks for it.
-        # 0 create H5 file for the entire measurement campaign, with timestamp in filename
-        # 1 connect to device (only once at the beginning of the measurment)
-        # 2 get api settings from config file and set plot type
-        # 3 get all measurement settings out of measurment_settings_file (contains frequency list for the measurment loop)
-        # 4 load measurement settings for given frequeny in device via other library
-        # 5 start measurment and read measurment_data
-        # 6 update and scale live plot 
-        # 7 save measurment data in H5 format
-        # 8 close port
-
-        #ask the user for the config file if no path was given
-        if config_path is None:
+    def measurement(self, config_path: str = None) -> None:
+        """Führt Frequenz-Sweeps durch (direkt oder über MUX32, optional mit Kompensation)."""
+        if not config_path:
             config_path = select_config_file()
-            if not config_path:
-                print("No config file selected, measurement cancelled.")
-                return
-        print(f"Uses config file: {config_path}")
+
         self.config_builder = ConfigBuilder(config_path)
+        self.measurement_settings = self.config_builder.get_settings_from_config()
+        self.measurement_queue = self.config_builder.generate_measurement_queue()
+        self.plot_type = self.measurement_settings.get("plot_type", "bode")
 
-        #creates a new H5 file for the whole measurement campaign, and saves the data in H5 format under "measurements"
+        # 1. Konfiguration robust parsen
+        mux_enabled = False
+        mux_mode = 4
+        raw_sensors = "1"
+        switch_delay = 0.05
+        comp_enabled = False
+        comp_file = ""
+
+        p = getattr(self.config_builder, "parser", None)
+        mux_sec = None
+        comp_sec = None
+
+        if p and hasattr(p, "sections"):
+            for sec in p.sections():
+                if sec.lower() == "mux":
+                    mux_sec = sec
+                elif sec.lower() == "compensation":
+                    comp_sec = sec
+
+        if not mux_sec or not comp_sec:
+            ini_direct = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
+            if ini_direct.read(config_path, encoding="utf-8"):
+                for sec in ini_direct.sections():
+                    if sec.lower() == "mux" and not mux_sec:
+                        p = ini_direct
+                        mux_sec = sec
+                    elif sec.lower() == "compensation" and not comp_sec:
+                        p = ini_direct
+                        comp_sec = sec
+
+        if p and mux_sec:
+            def clean_opt(opt, default=""):
+                if hasattr(p, "has_option") and p.has_option(mux_sec, opt):
+                    val = p.get(mux_sec, opt)
+                    return val.split("#")[0].split(";")[0].strip()
+                return default
+
+            mux_enabled = clean_opt("enabled", "false").lower() in ("true", "1", "yes", "on")
+            try:
+                mux_mode = int(clean_opt("mode", "4"))
+            except ValueError:
+                mux_mode = 4
+
+            raw_sensors = clean_opt("active_sensors", "1")
+            try:
+                switch_delay = float(clean_opt("switch_delay_s", "0.05"))
+            except ValueError:
+                switch_delay = 0.05
+
+        if p and comp_sec:
+            def clean_comp(opt, default=""):
+                if hasattr(p, "has_option") and p.has_option(comp_sec, opt):
+                    val = p.get(comp_sec, opt)
+                    return val.split("#")[0].split(";")[0].strip()
+                return default
+
+            comp_enabled = clean_comp("enabled", "false").lower() in ("true", "1", "yes", "on")
+            comp_file = clean_comp("open_file", "calibration/open_calibration.h5")
+
+        # 2. Sensor-Liste parsen
+        active_sensors = []
+        if mux_enabled:
+            for part in raw_sensors.split(","):
+                part = part.strip()
+                if "-" in part:
+                    start_s, end_s = part.split("-")
+                    active_sensors.extend(range(int(start_s), int(end_s) + 1))
+                elif part.isdigit():
+                    active_sensors.append(int(part))
+        else:
+            active_sensors = [0]
+
+        # 3. Kompensation initialisieren
+        if comp_enabled:
+            if os.path.exists(comp_file):
+                self.compensator.load_open_calibration(comp_file)
+            else:
+                print(f"[WARNUNG] Kompensationsdatei '{comp_file}' nicht gefunden. Messung erfolgt unkompensiert.")
+                comp_enabled = False
+
+        # 4. HDF5-Datei vorbereiten
         self.create_h5_file()
+        self.save_measurement_settings(config_path)
 
-        # 2
-        self.plot_type = self.config_builder.parser.parse_api_settings().plot_type
-
-        #get the measurement config as dictionary
-        self.measurement_settings = self.config_builder.parser.parse_as_flat_dict(False)
-        
-        #connects device via USB
-        serial_connection = self.device.connect_device_fs(settings = self.measurement_settings)
-
-        #saves the whole config file as a group in the h5-file
-        self.safe_measurement_settings(config_path = config_path)
-        
-        #load measurment settings (Options, frontend settings, Extension port settings, DC bias, SyncTime ) in device 
+        # 5. Hardware initialisieren
+        self.device.connect_device_fs(settings=self.measurement_settings)
         self.device.set_options(settings=self.measurement_settings)
 
+        if mux_enabled:
+            self.measurement_settings["measurement_channel"] = 2
+            for step in self.measurement_queue:
+                step["measurement_channel"] = 2
 
-        #creats a queue of all measurement setups to be executed in the measurement loop
-        measurement_setup_queue = self.config_builder.generate_measurement_queue()
-        len_measurement_queue = len(measurement_setup_queue)
-        print("Press [e] to stop the measurement manually.")
-        
-        icm = 0 #running index for continuous measurement
+            try:
+                self.device._send_command(self.device.CMD_GET_EXTENSION_MODULE, b"")
+            except Exception:
+                pass
 
-        while True:
-            #Measurement loop for all frequency setups in measurement_setup_queue
-            temp_measurement_setup_queue = list(measurement_setup_queue)
+            fe_mode = 2 if mux_mode == 4 else 1
+            c_range = self.measurement_settings.get("current_range", 1)
+            v_range = self.measurement_settings.get("voltage_range", 1)
+            self.device._send_command(self.device.CMD_SETUP_FRONTEND, bytes([0xFF, 0xFF, 0xFF]))
+            self.device._send_command(
+                self.device.CMD_SETUP_FRONTEND, bytes([fe_mode, 0x02, c_range, v_range])
+            )
 
-            #check if manual stop is triggert
-            if self.manual_stop == True:
-                break
+        print(f"[INFO] Mess-Queue generiert ({len(self.measurement_queue)} Frequenzpunkte pro Spektrum).")
+        if comp_enabled and self.compensator.is_loaded():
+            print("[INFO] Software-Kompensation AKTIV (Admittanz-Korrektur).")
+        else:
+            print("[INFO] Rohdaten-Messung (keine Kompensation).")
 
-            self.current_results = [] #clear current results
-            plt.cla()
+        if mux_enabled:
+            print(f"[INFO] MUX32 aktiv ({mux_mode}-Leiter) | Geplante Sensoren: {active_sensors}")
+        else:
+            print("[INFO] Messung über Frontbuchsen (MAIN PORT, kein MUX).")
+        print("[INFO] Messung läuft. Zum Stoppen 'Strg + C' im Terminal drücken.\n")
 
-            icm = icm + 1 
-            while temp_measurement_setup_queue:
+        try:
+            for sensor_idx in active_sensors:
+                if mux_enabled:
+                    print(f"\n==========================================")
+                    print(f" Starte Sweep für Sensor #{sensor_idx}")
+                    print(f"==========================================")
+                    self.device.route_mux_sensor(sensor_idx=sensor_idx, wire_mode=mux_mode)
+                    time.sleep(switch_delay)
+                else:
+                    print(f"\n--- Starte Messdurchlauf über Hauptbuchsen ---")
 
-                #get next measurement setup from measurement_setup_queue
-                current_setup = temp_measurement_setup_queue.pop(0)
-                current_id = str(icm)+"."+str(current_setup["id"])
-                #print(f'\n----- Starts Measurement with ID:{current_id} ---') #id, bzw anderen Zähler hinzufügen, um überblick über ausgeführte Messungen zu behalten
-                #print(current_setup)
-                #load frequnecy setup from measurement_setup_queue in device
-                self.device.set_frequency_setup(current_setup=current_setup)
+                self.current_results = []
 
-                #start measurment and collect data
-                results = self.start_measurement(current_setup = current_setup, measurement_settings =  self.measurement_settings)
-                #print(results)
+                for current_setup in self.measurement_queue:
+                    step_results, timestamp = self.start_single_step(
+                        current_setup, self.measurement_settings
+                    )
 
-                self.current_results.append(results[0]) #get all measurements from one measurement cycle
+                    # Optionale Kompensation anwenden
+                    if comp_enabled and self.compensator.is_loaded():
+                        current_s_idx = sensor_idx if mux_enabled else 0
+                        re_comp, im_comp = self.compensator.compensate_spectrum(
+                            frequency=float(current_setup["frequency"]),
+                            real_list=step_results["real"],
+                            imag_list=step_results["imag"],
+                            sensor_idx=current_s_idx,
+                        )
+                        # Rohdaten sichern
+                        step_results["real_raw"] = list(step_results["real"])
+                        step_results["imag_raw"] = list(step_results["imag"])
+                        # Kompensierte Werte für Speicherung und Plot setzen
+                        step_results["real"] = re_comp
+                        step_results["imag"] = im_comp
 
-                #update live plot with new data
-                self.update_live_plot(results = results, current_setup=current_setup, current_results = self.current_results, len_measurement_queue = len_measurement_queue)
+                    # In HDF5 ablegen
+                    self.save_measurement(
+                        results_data=step_results,
+                        timestamp=timestamp,
+                        current_setup=current_setup,
+                        icm=1,
+                        sensor_idx=sensor_idx if mux_enabled else 0,
+                    )
 
-                #save measurment data in H5 format
-                self.safe_measurment(results = results, current_setup=current_setup, icm = icm)
+                    # Live-Plot aktualisieren
+                    self.current_results.append(step_results)
+                    self.update_live_plot(
+                        results=step_results,
+                        current_setup=current_setup,
+                        current_results=self.current_results,
+                        len_queue=len(self.measurement_queue),
+                    )
 
-                
-                if keyboard.is_pressed('e'):
-                    self.manual_stop = True
-                    print("manual measurement stop by pressing [e]")
-                    return self.manual_stop
+            print("\n[OK] Alle Messungen erfolgreich abgeschlossen.")
 
+        except KeyboardInterrupt:
+            print("\n[INFO] Messung manuell durch Benutzer abgebrochen (Strg+C).")
+        finally:
+            if self.device:
+                if mux_enabled:
+                    try:
+                        self.device.set_extension_port(0, 0, 0, 0)
+                    except Exception:
+                        pass
+                if hasattr(self.device, "device") and self.device.device and self.device.device.is_open:
+                    self.device.device.close()
+                    print("[OK] Serielle Schnittstelle geschlossen.")
 
-            #if "time_of_continuous_measurement" = 0 run only one measurement cycle
-            if self.config_builder.parser.parse_api_settings().continuous_measurement == False:
-                break
-
-
-
-        print('\n----- finished all measurements -----')
-        #serial_connection.close()
-
-        #after finishing measurement loop, keep the plot open for further analysis, until user closes it
-        plt.ioff() #interactive mode off
-        plt.show() #keep plot open until user closes it
+        plt.ioff()
+        plt.show()

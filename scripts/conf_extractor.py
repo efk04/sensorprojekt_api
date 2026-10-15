@@ -1,81 +1,119 @@
 """
-Script to recreate the config.ini file from an HDF5 measurement file.
-- file dialog to select the HDF5 measurement file
-- file dialog to save the new config.ini file
+conf_extractor.py - Rekonstruktion von INI-Dateien aus HDF5-Messdaten.
 
-The config is read from the structure that Measurement.safe_measurement_settings() stores:
-Configuration/<Section> (group) -> <key> = "<value>" (attribute)
-Comments of the original config file are not stored and can't be recreated.
+Liest die in einer HDF5-Datei gesicherte Gerätekonfiguration aus der Gruppe
+'Configuration' aus und erzeugt daraus wieder eine valide .ini-Datei.
 """
 
-#Imports
+import argparse
 import configparser
+import os
+import sys
 import h5py
-from tkinter import Tk, filedialog
 
 
-def extract_config_from_hdf(hdf_file_path: str | None = None):
+def select_files_via_gui() -> tuple[str | None, str | None]:
     """
-    Extracts the configuration from an HDF5 file and saves it as a new config.ini file.
+    Öffnet grafische Dialoge zur Datei- und Zielpfadauswahl.
 
-    :param hdf_file_path: Path to the HDF5 file. If None, a file dialog asks for it.
-    :return: path of the written config.ini file (None if the user cancelled a dialog).
+    :return: Tupel aus (Eingabepfad_HDF5, Ausgabepfad_INI).
     """
+    from tkinter import Tk, filedialog
 
-    #hidden tkinter window, only needed as parent for the file dialogs
     root = Tk()
     root.withdraw()
-    root.attributes('-topmost', True)
+    root.attributes("-topmost", True)
 
-    #ask the user for the HDF5 file if no path was given
-    if hdf_file_path is None:
-        hdf_file_path = filedialog.askopenfilename(
-            title="Select measurement HDF5 file",
-            filetypes=[("HDF5 files", "*.h5 *.hdf5"), ("All files", "*.*")],
+    try:
+        hdf_path = filedialog.askopenfilename(
+            title="HDF5-Messdatei auswählen",
+            filetypes=[("HDF5-Dateien", "*.h5 *.hdf5"), ("Alle Dateien", "*.*")],
         )
-        if not hdf_file_path:
-            root.destroy()
-            print("No HDF5 file selected, nothing extracted.")
-            return None
+        if not hdf_path:
+            return None, None
 
-    #rebuild the config: every group is a section, every attribute a key
+        # Standard-Ausgabenamen anhand der HDF5-Datei vorschlagen
+        default_ini_name = os.path.splitext(os.path.basename(hdf_path))[0] + "_extracted.ini"
+
+        output_path = filedialog.asksaveasfilename(
+            title="Extrahierte Konfiguration speichern unter",
+            defaultextension=".ini",
+            initialfile=default_ini_name,
+            filetypes=[("INI-Dateien", "*.ini"), ("Alle Dateien", "*.*")],
+        )
+        return hdf_path, output_path
+    finally:
+        root.destroy()
+
+
+def extract_config_from_hdf(hdf_file_path: str, output_ini_path: str) -> str:
+    """
+    Liest Konfigurationsgruppen und Attribute aus HDF5 und schreibt die INI-Datei.
+
+    :param hdf_file_path: Pfad zur existierenden HDF5-Messdatei.
+    :param output_ini_path: Zieldateipfad für die extrahierte .ini-Datei.
+    :return: Pfad der geschriebenen INI-Datei.
+    """
+    if not os.path.isfile(hdf_file_path):
+        raise FileNotFoundError(f"Die HDF5-Datei '{hdf_file_path}' existiert nicht.")
+
     ini = configparser.ConfigParser(interpolation=None)
-    ini.optionxform = str #keep the case of the keys
-    with h5py.File(hdf_file_path, 'r') as hdf_file:
+    ini.optionxform = str  # Groß-/Kleinschreibung beibehalten
+
+    with h5py.File(hdf_file_path, "r") as hdf:
         group_name = "Configuration"
-        if group_name not in hdf_file:
-            root.destroy()
-            raise KeyError(f"The HDF5 file '{hdf_file_path}' does not contain the group '{group_name}'.")
+        if group_name not in hdf:
+            raise KeyError(f"Die HDF5-Datei enthält keine Konfigurationsgruppe '{group_name}'.")
 
-        config_group = hdf_file[group_name]
-        source_file = config_group.attrs.get("source_file", "config.ini")
-        if isinstance(source_file, bytes):
-            source_file = source_file.decode('utf-8')
+        config_group = hdf[group_name]
 
-        for section, section_group in config_group.items():
-            ini.add_section(section)
-            for key, value in section_group.attrs.items():
-                ini.set(section, key, value.decode('utf-8') if isinstance(value, bytes) else str(value))
+        # Jede Untergruppe entspricht einer INI-Sektion ([Connection], [Frontend], ...)
+        for section_name, section_group in config_group.items():
+            ini.add_section(section_name)
+            # Attribute entsprechen den Parametern dieser Sektion
+            for key, val in section_group.attrs.items():
+                # Bytes-Werte bei Bedarf in Strings dekodieren
+                str_val = val.decode("utf-8") if isinstance(val, bytes) else str(val)
+                ini.set(section_name, key, str_val)
 
-    #ask the user where to save the config file (suggests the name of the original config file)
-    output_path = filedialog.asksaveasfilename(
-        title="Save extracted config as",
-        defaultextension=".ini",
-        initialfile=source_file,
-        filetypes=[("INI files", "*.ini"), ("All files", "*.*")],
-    )
-    root.destroy()
+    # Zielverzeichnis bei Bedarf anlegen
+    target_dir = os.path.dirname(output_ini_path)
+    if target_dir:
+        os.makedirs(target_dir, exist_ok=True)
 
-    if not output_path:
-        print("No output file selected, config was not saved.")
-        return None
+    with open(output_ini_path, "w", encoding="utf-8") as out_file:
+        ini.write(out_file)
 
-    with open(output_path, 'w', encoding='utf-8') as config_file:
-        ini.write(config_file)
-    print(f"Config extracted to: {output_path}")
+    print(f"[OK] Konfiguration erfolgreich extrahiert nach: {output_ini_path}")
+    return output_ini_path
 
-    return output_path
+
+def main() -> None:
+    """Parst Startargumente oder öffnet Fallback-Dialoge."""
+    parser = argparse.ArgumentParser(description="Extrahiert die Konfiguration aus einer ISX-3 HDF5-Datei.")
+    parser.add_argument("-i", "--input", help="Pfad zur HDF5-Datei", default=None)
+    parser.add_argument("-o", "--output", help="Pfad zur Ausgabe-INI-Datei", default=None)
+    args = parser.parse_args()
+
+    hdf_in = args.input
+    ini_out = args.output
+
+    # Falls keine Parameter übergeben wurden, grafischen Dialog nutzen
+    if not hdf_in or not ini_out:
+        gui_in, gui_out = select_files_via_gui()
+        hdf_in = hdf_in or gui_in
+        ini_out = ini_out or gui_out
+
+    if not hdf_in or not ini_out:
+        print("[INFO] Vorgang abgebrochen: Keine Dateien ausgewählt.")
+        sys.exit(0)
+
+    try:
+        extract_config_from_hdf(hdf_in, ini_out)
+    except Exception as err:
+        print(f"[FEHLER] Extraktion fehlgeschlagen: {err}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
-    extract_config_from_hdf()
+    main()
