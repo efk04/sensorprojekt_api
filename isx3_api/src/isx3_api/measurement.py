@@ -3,7 +3,7 @@ measurement.py - Zentraler Messungs-Orchestrator für das Sciospec ISX-3.
 
 Koordiniert das Laden der Konfiguration, die Initialisierung der Hardware,
 die Abarbeitung der Frequenz-Messpunkte, das MUX32-Routing, die optionale
-Open-Kompensation, das HDF5-Logging sowie die Live-Plots.
+Hardware-Skalierung und Open-Kompensation, das HDF5-Logging sowie die Live-Plots.
 """
 
 from datetime import datetime
@@ -32,6 +32,7 @@ class Measurement:
         self.filename: str = ""
         self.plot_type: str = "bode"
         self.measurement_settings: dict = {}
+        self.measurement_queue: list[dict] = []
         self.current_results: list[dict] = []
         self.manual_stop: bool = False
 
@@ -51,10 +52,10 @@ class Measurement:
         print(f"[OK] HDF5-Messdatei erstellt: {full_path}")
         return full_path
 
-    def save_measurement_settings(self, config_path: str) -> None:
+    def save_measurement_settings(self, config_path: str, scale_factor: float = 1.0) -> None:
         """Sichert die komplette Konfigurationsdatei als Metadaten in der HDF5-Datei."""
         group_name = "Configuration"
-        ini = configparser.ConfigParser(interpolation=None)
+        ini = configparser.ConfigParser(interpolation=None, inline_comment_prefixes=("#", ";"))
         ini.optionxform = str
 
         if not ini.read(config_path, encoding="utf-8"):
@@ -64,6 +65,7 @@ class Measurement:
         with h5py.File(full_path, "a") as h5_file:
             config_group = h5_file.create_group(group_name, track_order=True)
             config_group.attrs["source_file"] = os.path.basename(config_path)
+            config_group.attrs["applied_scale_factor"] = float(scale_factor)
 
             for section in ini.sections():
                 section_group = config_group.create_group(section, track_order=True)
@@ -101,7 +103,6 @@ class Measurement:
             group.create_dataset("real_part", data=results_data["real"])
             group.create_dataset("imaginary_part", data=results_data["imag"])
 
-            # Rohdaten mitspeichern, falls Kompensation aktiv war
             if "real_raw" in results_data and "imag_raw" in results_data:
                 group.create_dataset("real_part_raw", data=results_data["real_raw"])
                 group.create_dataset("imaginary_part_raw", data=results_data["imag_raw"])
@@ -119,8 +120,8 @@ class Measurement:
         """Führt die Messung für einen einzelnen Frequenzschritt aus."""
         self.device.set_frequency_setup(current_setup)
 
-        number_of_spectra = current_setup["number_of_spectra"]
-        step_id = current_setup["id"]
+        number_of_spectra = int(current_setup["number_of_spectra"])
+        step_id = int(current_setup["id"])
 
         results = self.device.start_measurement(
             spectra=number_of_spectra,
@@ -129,7 +130,7 @@ class Measurement:
         )
         timestamp = time.time()
 
-        freq_value = current_setup["frequency"]
+        freq_value = float(current_setup["frequency"])
         num_points = len(results.get("id", []))
         results["frequencies"] = [freq_value] * num_points
 
@@ -147,74 +148,44 @@ class Measurement:
 
         plt.pause(0.01)
 
-    def measurement(self, config_path: str = None) -> None:
-        """Führt Frequenz-Sweeps durch (direkt oder über MUX32, optional mit Kompensation)."""
+    def measurement(self, config_path: str | None = None) -> None:
+        """Führt Frequenz-Sweeps durch (direkt oder über MUX32, optional mit Skalierung & Kompensation)."""
         if not config_path:
             config_path = select_config_file()
+            if not config_path:
+                print("[INFO] Keine Konfigurationsdatei ausgewählt. Abbruch.")
+                return
 
         self.config_builder = ConfigBuilder(config_path)
         self.measurement_settings = self.config_builder.get_settings_from_config()
         self.measurement_queue = self.config_builder.generate_measurement_queue()
         self.plot_type = self.measurement_settings.get("plot_type", "bode")
 
-        # 1. Konfiguration robust parsen
-        mux_enabled = False
-        mux_mode = 4
-        raw_sensors = "1"
-        switch_delay = 0.05
-        comp_enabled = False
-        comp_file = ""
+        # 1. Konfiguration robust auslesen (kompatibel mit altem und neuem ConfigParser)
+        mux_enabled = bool(self.measurement_settings.get("mux_enabled", False))
+        mux_mode = int(self.measurement_settings.get("mux_mode", 4))
+        raw_sensors = str(self.measurement_settings.get("mux_active_sensors", "8"))
+        switch_delay = float(self.measurement_settings.get("mux_switch_delay_s", 0.05))
 
-        p = getattr(self.config_builder, "parser", None)
-        mux_sec = None
-        comp_sec = None
+        comp_enabled = bool(self.measurement_settings.get("compensation_enabled", False))
+        comp_file = str(self.measurement_settings.get("compensation_open_file", "calibration/open_calibration.h5"))
 
-        if p and hasattr(p, "sections"):
-            for sec in p.sections():
+        scale_factor = float(self.measurement_settings.get("hardware_scale_factor", 1.0))
+
+        # Fallback-Check direkt auf der INI-Datei, falls ein älterer config_handler genutzt wird
+        ini_direct = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
+        if ini_direct.read(config_path, encoding="utf-8"):
+            for sec in ini_direct.sections():
                 if sec.lower() == "mux":
-                    mux_sec = sec
+                    mux_enabled = ini_direct.getboolean(sec, "enabled", fallback=mux_enabled)
+                    mux_mode = ini_direct.getint(sec, "mode", fallback=mux_mode)
+                    raw_sensors = ini_direct.get(sec, "active_sensors", fallback=raw_sensors)
+                    switch_delay = ini_direct.getfloat(sec, "switch_delay_s", fallback=switch_delay)
                 elif sec.lower() == "compensation":
-                    comp_sec = sec
-
-        if not mux_sec or not comp_sec:
-            ini_direct = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
-            if ini_direct.read(config_path, encoding="utf-8"):
-                for sec in ini_direct.sections():
-                    if sec.lower() == "mux" and not mux_sec:
-                        p = ini_direct
-                        mux_sec = sec
-                    elif sec.lower() == "compensation" and not comp_sec:
-                        p = ini_direct
-                        comp_sec = sec
-
-        if p and mux_sec:
-            def clean_opt(opt, default=""):
-                if hasattr(p, "has_option") and p.has_option(mux_sec, opt):
-                    val = p.get(mux_sec, opt)
-                    return val.split("#")[0].split(";")[0].strip()
-                return default
-
-            mux_enabled = clean_opt("enabled", "false").lower() in ("true", "1", "yes", "on")
-            try:
-                mux_mode = int(clean_opt("mode", "4"))
-            except ValueError:
-                mux_mode = 4
-
-            raw_sensors = clean_opt("active_sensors", "1")
-            try:
-                switch_delay = float(clean_opt("switch_delay_s", "0.05"))
-            except ValueError:
-                switch_delay = 0.05
-
-        if p and comp_sec:
-            def clean_comp(opt, default=""):
-                if hasattr(p, "has_option") and p.has_option(comp_sec, opt):
-                    val = p.get(comp_sec, opt)
-                    return val.split("#")[0].split(";")[0].strip()
-                return default
-
-            comp_enabled = clean_comp("enabled", "false").lower() in ("true", "1", "yes", "on")
-            comp_file = clean_comp("open_file", "calibration/open_calibration.h5")
+                    comp_enabled = ini_direct.getboolean(sec, "enabled", fallback=comp_enabled)
+                    comp_file = ini_direct.get(sec, "open_file", fallback=comp_file)
+                elif sec.lower() == "frontend":
+                    scale_factor = ini_direct.getfloat(sec, "hardware_scale_factor", fallback=scale_factor)
 
         # 2. Sensor-Liste parsen
         active_sensors = []
@@ -229,7 +200,7 @@ class Measurement:
         else:
             active_sensors = [0]
 
-        # 3. Kompensation initialisieren
+        # 3. Optionale Open-Kompensation initialisieren
         if comp_enabled:
             if os.path.exists(comp_file):
                 self.compensator.load_open_calibration(comp_file)
@@ -239,35 +210,29 @@ class Measurement:
 
         # 4. HDF5-Datei vorbereiten
         self.create_h5_file()
-        self.save_measurement_settings(config_path)
+        self.save_measurement_settings(config_path, scale_factor=scale_factor)
 
-        # 5. Hardware initialisieren
-        self.device.connect_device_fs(settings=self.measurement_settings)
+        # 5. Hardware verbinden und Optionen setzen
+        if not self.device.connect_device_fs(settings=self.measurement_settings):
+            return
+
         self.device.set_options(settings=self.measurement_settings)
 
         if mux_enabled:
+            fe_mode = 2 if mux_mode == 4 else 1
             self.measurement_settings["measurement_channel"] = 2
+            self.measurement_settings["measurement_mode"] = fe_mode
             for step in self.measurement_queue:
                 step["measurement_channel"] = 2
+                step["measurement_mode"] = fe_mode
 
-            try:
-                self.device._send_command(self.device.CMD_GET_EXTENSION_MODULE, b"")
-            except Exception:
-                pass
-
-            fe_mode = 2 if mux_mode == 4 else 1
-            c_range = self.measurement_settings.get("current_range", 1)
-            v_range = self.measurement_settings.get("voltage_range", 1)
-            self.device._send_command(self.device.CMD_SETUP_FRONTEND, bytes([0xFF, 0xFF, 0xFF]))
-            self.device._send_command(
-                self.device.CMD_SETUP_FRONTEND, bytes([fe_mode, 0x02, c_range, v_range])
-            )
-
+        c_range = int(self.measurement_settings.get("current_range", 1))
         print(f"[INFO] Mess-Queue generiert ({len(self.measurement_queue)} Frequenzpunkte pro Spektrum).")
+        print(f"[INFO] Current Range Index: {c_range} | Hardware-Scale-Faktor: {scale_factor:.4f}")
         if comp_enabled and self.compensator.is_loaded():
             print("[INFO] Software-Kompensation AKTIV (Admittanz-Korrektur).")
         else:
-            print("[INFO] Rohdaten-Messung (keine Kompensation).")
+            print("[INFO] Rohdaten-Messung (keine Software-Kompensation).")
 
         if mux_enabled:
             print(f"[INFO] MUX32 aktiv ({mux_mode}-Leiter) | Geplante Sensoren: {active_sensors}")
@@ -284,6 +249,7 @@ class Measurement:
                     self.device.route_mux_sensor(sensor_idx=sensor_idx, wire_mode=mux_mode)
                     time.sleep(switch_delay)
                 else:
+                    self.device.active_mux_pins = None
                     print(f"\n--- Starte Messdurchlauf über Hauptbuchsen ---")
 
                 self.current_results = []
@@ -293,7 +259,17 @@ class Measurement:
                         current_setup, self.measurement_settings
                     )
 
-                    # Optionale Kompensation anwenden
+                    # Unskalierte Hardware-Rohdaten sichern, falls Skalierung oder Kompensation aktiv ist
+                    if abs(scale_factor - 1.0) > 1e-6 or (comp_enabled and self.compensator.is_loaded()):
+                        step_results["real_raw"] = list(step_results["real"])
+                        step_results["imag_raw"] = list(step_results["imag"])
+
+                    # 1. Hardware-Skalierungsfaktor anwenden
+                    if abs(scale_factor - 1.0) > 1e-6:
+                        step_results["real"] = [r * scale_factor for r in step_results["real"]]
+                        step_results["imag"] = [i * scale_factor for i in step_results["imag"]]
+
+                    # 2. Optionale Open-Kompensation anwenden
                     if comp_enabled and self.compensator.is_loaded():
                         current_s_idx = sensor_idx if mux_enabled else 0
                         re_comp, im_comp = self.compensator.compensate_spectrum(
@@ -302,10 +278,6 @@ class Measurement:
                             imag_list=step_results["imag"],
                             sensor_idx=current_s_idx,
                         )
-                        # Rohdaten sichern
-                        step_results["real_raw"] = list(step_results["real"])
-                        step_results["imag_raw"] = list(step_results["imag"])
-                        # Kompensierte Werte für Speicherung und Plot setzen
                         step_results["real"] = re_comp
                         step_results["imag"] = im_comp
 
@@ -335,7 +307,7 @@ class Measurement:
             if self.device:
                 if mux_enabled:
                     try:
-                        self.device.set_extension_port(0, 0, 0, 0)
+                        self.device.clear_mux_routing()
                     except Exception:
                         pass
                 if hasattr(self.device, "device") and self.device.device and self.device.device.is_open:

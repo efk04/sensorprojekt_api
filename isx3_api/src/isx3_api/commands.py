@@ -11,9 +11,8 @@ import serial
 import serial.tools.list_ports
 
 
-# Statustabelle für Rückmeldungen des ISX-3 (Acknowledge- und Systemnachrichten)
 MSG_DICT = {
-    0x01: "Keine Nachricht im Nachrichtenpuffer vorhanden",
+    0x01: "Frame-NACK: Ungültige Syntax",
     0x02: "Kommunikations-Timeout (weniger Daten empfangen als erwartet)",
     0x04: "System-Boot bereit (Wake-Up-Meldung)",
     0x11: "Gültige TCP-Client-Socket-Verbindung",
@@ -30,13 +29,13 @@ MSG_DICT = {
 class ISX3:
     """Kapselt alle Steuerbefehle und das Binärprotokoll des Sciospec ISX-3."""
 
-    # Feste Protokoll-Konstanten laut Sciospec-Spezifikation
     ACK_TAG = 0x18
     ACK_SUCCESS = 0x83
     NACK_SYNTAX = 0x81
     NACK_NOT_RECOGNIZED = 0x82
 
     CMD_SETUP_FRONTEND = 0xB0
+    CMD_GET_FRONTEND = 0xB1
     CMD_SETUP_EXTENSION = 0xB2
     CMD_GET_EXTENSION_PORT = 0xB3
     CMD_GET_EXTENSION_MODULE = 0xB5
@@ -49,6 +48,8 @@ class ISX3:
         self.device: serial.Serial | None = None
         self.serial_protocol = None
         self.print_msg = True
+        # Speichert das aktuell aktive MUX32-Pin-Quartett (CE, RE, WS, WE)
+        self.active_mux_pins: tuple[int, int, int, int] | None = None
 
     def is_port_available(self, port: str) -> bool:
         """Prüft, ob der angegebene COM-Port im Betriebssystem existiert."""
@@ -74,6 +75,9 @@ class ISX3:
                 bytesize=serial.EIGHTBITS,
             )
             self.serial_protocol = "FS"
+            self.active_mux_pins = None
+            self.device.reset_input_buffer()
+            self.device.reset_output_buffer()
             print(f"[OK] Erfolgreich verbunden mit {self.device.name} bei {baudrate} Baud.")
             return self.device
         except serial.SerialException as error:
@@ -118,6 +122,9 @@ class ISX3:
                 status = rest[1]
                 if status == self.ACK_SUCCESS:
                     return
+                if status in (0x90, 0x91):
+                    print(f"[WARNUNG] ISX-3 meldet: {MSG_DICT[status]}")
+                    continue
                 if status == self.NACK_SYNTAX:
                     raise ValueError(f"NACK (0x81): Ungültige Syntax/Parameter für Befehl 0x{original_cmd_tag:02X}.")
                 if status == self.NACK_NOT_RECOGNIZED:
@@ -126,14 +133,15 @@ class ISX3:
                 status_text = MSG_DICT.get(status, f"Unbekannter Status-Code 0x{status:02X}")
                 raise ValueError(f"Unerwarteter Status empfangen: {status_text}")
 
-            elif tag == 0x1D:
+            elif tag in (0x1D, self.CMD_GET_EXTENSION_MODULE, self.CMD_GET_FRONTEND, self.CMD_GET_EXTENSION_PORT):
                 len_b = self.device.read(1)
                 if not len_b:
                     continue
                 msg_len = len_b[0]
                 payload = self.device.read(msg_len)
-                self.device.read(1)
-                print(f"[STATUS-INFO] ISX-3 Systemnachricht (0x1D): Payload={payload.hex()}")
+                self.device.read(1)  # End-Tag konsumieren
+                if tag == 0x1D:
+                    print(f"[STATUS-INFO] ISX-3 Systemnachricht (0x1D): Payload={payload.hex()}")
                 continue
 
         raise TimeoutError(f"Timeout: Keine Bestätigung (ACK) für Befehl 0x{original_cmd_tag:02X} erhalten.")
@@ -149,15 +157,16 @@ class ISX3:
         self.device.flush()
         time.sleep(1.0)
         self.device.reset_input_buffer()
+        self.active_mux_pins = None
         print("[OK] Software-Reset an ISX-3 gesendet.")
 
     def set_options(self, settings: dict) -> None:
         """Konfiguriert globale Geräteeinstellungen (Zeitstempel, DC-Bias, Sync-Time)."""
-        timestamp_mode = settings.get("timestamp_mode", 0)
-        enable_current_range = settings.get("enable_current_range_output", 0)
-        dc_bias_enabled = settings.get("dc_bias_enabled", False)
-        bias_voltage_v = settings.get("bias_voltage_v", 0.0)
-        sync_time_us = settings.get("sync_time_us", 0)
+        timestamp_mode = int(settings.get("timestamp_mode", 0))
+        enable_current_range = bool(settings.get("enable_current_range_output", False))
+        dc_bias_enabled = bool(settings.get("dc_bias_enabled", False))
+        bias_voltage_v = float(settings.get("bias_voltage_v", 0.0))
+        sync_time_us = int(settings.get("sync_time_us", 0))
 
         if timestamp_mode == 1:
             self._send_command(0x97, bytes([0x01, 0x01]))
@@ -184,16 +193,20 @@ class ISX3:
         working_port: int,
     ) -> None:
         """Setzt die Extension-Ports (Befehl 0xB2) zur Ansteuerung des MUX32."""
-        data = bytes([
+        pins = (
             int(counter_port),
             int(reference_port),
             int(working_sense_port),
             int(working_port),
-        ])
-        self._send_command(self.CMD_SETUP_EXTENSION, data)
+        )
+        self._send_command(self.CMD_SETUP_EXTENSION, bytes(pins))
 
-    def route_mux_sensor(self, sensor_idx: int, wire_mode: int = 4) -> tuple[int, int, int, int]:
-        """Berechnet die MUX32-Pins für einen Sensor und schaltet die Relais."""
+    def route_mux_sensor(self, sensor_idx: int, wire_mode: int = 4, **kwargs) -> tuple[int, int, int, int]:
+        """
+        Berechnet die MUX32-Pins für einen Sensor und speichert sie in self.active_mux_pins.
+        Das physische Pushen auf den Hardware-Stack erfolgt in set_frequency_setup()
+        unmittelbar nach dem 0xB0-Frontend-Befehl, damit B0 FF FF FF die Pins nicht löscht!
+        """
         if wire_mode == 4:
             if not 1 <= sensor_idx <= 8:
                 raise ValueError(f"Sensor-Index {sensor_idx} ungültig für 4-Leiter-Modus (erlaubt: 1..8).")
@@ -211,58 +224,51 @@ class ISX3:
         else:
             raise ValueError(f"Ungültiger wire_mode: {wire_mode}. Erlaubt sind nur 2 oder 4.")
 
-        print(f"[MUX32] Schalte Sensor #{sensor_idx} ({wire_mode}-Leiter) -> CE:{ce}, RE:{re}, WS:{ws}, WE:{we}")
-        self.set_extension_port(counter_port=ce, reference_port=re, working_sense_port=ws, working_port=we)
+        self.active_mux_pins = (ce, re, ws, we)
+        print(f"[MUX32] Sensor #{sensor_idx} ({wire_mode}-Leiter) ausgewählt -> CE:{ce}, RE:{re}, WS:{ws}, WE:{we}")
         return ce, re, ws, we
 
-    def set_frequency_setup(self, current_setup: dict) -> None:
-        """Konfiguriert Frontend und Frequenz-Messpunkt für die manuelle Schrittmessung."""
-        measurement_mode = int(current_setup.get("measurement_mode", 2))
-        measurement_channel = int(current_setup.get("measurement_channel", 1))
-        current_range = int(current_setup.get("current_range", 1))
-        voltage_range = int(current_setup.get("voltage_range", 1))
+    def clear_mux_routing(self) -> None:
+        """Deaktiviert das MUX-Routing und leert den Frontend-/MUX-Stack."""
+        self.active_mux_pins = None
+        if self.device and self.device.is_open:
+            self._send_command(self.CMD_SETUP_FRONTEND, bytes([0xFF, 0xFF, 0xFF]))
 
+    def set_frequency_setup(self, current_setup: dict) -> None:
+        """
+        Konfiguriert ausschließlich den Frequenzpunkt im Einzelfrequenz-Modus (0xB6 0x02).
+        Frontend- und MUX-Einstellungen werden einmalig vor dem Sweep vorgenommen
+        und nicht bei jedem Frequenzpunkt überschrieben!
+        """
         frequency = float(current_setup["frequency"])
         precision = float(current_setup.get("precision", 1.0))
         amplitude = float(current_setup.get("amplitude", 0.0001))
-        excitation_type = int(current_setup.get("excitation_type", 1))
+        step_id = int(current_setup.get("id", 1))
+        excitation_type = int(current_setup.get("excitation_type", 2))
         point_delay_us = int(current_setup.get("point_delay_us", 0))
         phase_sync = bool(current_setup.get("phase_sync", False))
 
-        self._send_command(self.CMD_SETUP_FREQUENCY, bytes([0x01]))
+        # 1. Beim allerersten Punkt des Sweeps das Frequenz-Setup im ISX-3 initialisieren (0xB6 0x01)
+        if step_id == 1:
+            time.sleep(0.02)
+            self._send_command(self.CMD_SETUP_FREQUENCY, bytes([0x01]))
 
-        self._send_command(self.CMD_SETUP_FRONTEND, bytes([0xFF, 0xFF, 0xFF]))
-        fe_payload = struct.pack(">BBBB", measurement_mode, measurement_channel, current_range, voltage_range)
-        self._send_command(self.CMD_SETUP_FRONTEND, fe_payload)
-
+        # 2. Extended Options (EOPs) vorbereiten
         eops = b""
         if point_delay_us > 0:
-            eops += bytes([0x01]) + struct.pack(">I", point_delay_us)
-        if phase_sync:
+            eops += bytes([0x01]) + struct.pack(">I", int(point_delay_us))
+        if phase_sync and frequency >= 100000.0:
             eops += bytes([0x02]) + struct.pack(">I", 1)
         if excitation_type != 1:
-            eops += bytes([0x03]) + struct.pack(">I", excitation_type)
+            eops += bytes([0x03]) + struct.pack(">I", int(excitation_type))
 
-        payload = bytes([0x02]) + struct.pack(">fff", frequency, precision, amplitude) + eops
+        # 3. Einzelnen Frequenzpunkt zur Queue hinzufügen (0xB6 0x02)
+        payload = (
+            bytes([0x02])
+            + struct.pack(">fff", frequency, precision, amplitude)
+            + eops
+        )
         self._send_command(self.CMD_SETUP_FREQUENCY, payload)
-
-    def load_setup_from_slot(self, slot: int = 1) -> None:
-        """Lädt eine im Flash-Speicher hinterlegte Konfiguration inkl. Kompensationsdaten (Befehl 0xB6 0x20)."""
-        if not 1 <= slot <= 255:
-            raise ValueError("Der Slot muss zwischen 1 und 255 liegen.")
-
-        payload = bytes([0x20, int(slot)])
-        self._send_command(self.CMD_SETUP_FREQUENCY, payload)
-        print(f"[OK] Setup und Kompensation aus Geräteslot {slot} geladen.")
-
-    def save_setup_to_slot(self, slot: int = 1) -> None:
-        """Sichert die aktuelle Setup-Konfiguration dauerhaft im Geräteslot (Befehl 0xB7 0x20)."""
-        if not 1 <= slot <= 255:
-            raise ValueError("Der Slot muss zwischen 1 und 255 liegen.")
-
-        payload = bytes([0x20, int(slot)])
-        self._send_command(self.CMD_GET_SETUP, payload)
-        print(f"[OK] Setup dauerhaft in Slot {slot} gesichert.")
 
     def reset_compensation(self) -> None:
         """Setzt die Kompensationsdaten des aktuellen Setups zurück (Befehl 0xB6 0x17 0x01)."""
@@ -277,13 +283,8 @@ class ISX3:
         if not self.device or not self.device.is_open:
             print("[FEHLER] Kein Gerät verbunden.")
             return {
-                "id": [],
-                "real": [],
-                "imag": [],
-                "timestamp": [],
-                "timestamp_unit": [],
-                "current_range": [],
-                "frequencies": [],
+                "id": [], "real": [], "imag": [], "timestamp": [],
+                "timestamp_unit": [], "current_range": [], "frequencies": [],
             }
 
         cmd_tag = self.CMD_MEASURE
@@ -303,13 +304,8 @@ class ISX3:
             self.device.flush()
             print("[INFO] Kontinuierliche Messung gestoppt.")
             return {
-                "id": [],
-                "real": [],
-                "imag": [],
-                "timestamp": [],
-                "timestamp_unit": [],
-                "current_range": [],
-                "frequencies": [],
+                "id": [], "real": [], "imag": [], "timestamp": [],
+                "timestamp_unit": [], "current_range": [], "frequencies": [],
             }
 
         data_start = bytes([0x01]) + spectra.to_bytes(2, byteorder="big")
@@ -318,7 +314,7 @@ class ISX3:
         self.device.flush()
 
         total_frames = expected_frames if expected_frames is not None else spectra
-        timeout = max(10.0, float(total_frames) * 0.5)
+        timeout = max(10.0, float(total_frames) * 0.8)
 
         return self.read_measurement_data(
             spectra=total_frames,
@@ -331,13 +327,8 @@ class ISX3:
     ) -> dict:
         """Liest eingehende Messframes (0xB8) und verarbeitet eventuelle ACK/NACK-Frames."""
         results = {
-            "id": [],
-            "real": [],
-            "imag": [],
-            "timestamp": [],
-            "timestamp_unit": [],
-            "current_range": [],
-            "frequencies": [],
+            "id": [], "real": [], "imag": [], "timestamp": [],
+            "timestamp_unit": [], "current_range": [], "frequencies": [],
         }
 
         start_time = time.time()
@@ -363,6 +354,9 @@ class ISX3:
                 if len(ack_rest) == 3 and ack_rest[2] == self.ACK_TAG:
                     status = ack_rest[1]
                     if status == self.ACK_SUCCESS:
+                        continue
+                    elif status in (0x90, 0x91):
+                        print(f"[WARNUNG] ISX-3 meldet während Messung: {MSG_DICT[status]}")
                         continue
                     elif status == self.NACK_SYNTAX:
                         raise ValueError("NACK (0x81): ISX-3 meldet Syntax-/Parameterfehler bei Befehl 0xB8!")
@@ -406,18 +400,12 @@ class ISX3:
                 current_range_val = frame[2]
                 real = struct.unpack(">f", frame[3:7])[0]
                 imag = struct.unpack(">f", frame[7:11])[0]
-            elif (
-                length == 0x0F
-                and measurement_settings.get("enable_current_range_output", 0) == 0
-            ):
+            elif length == 0x0F and measurement_settings.get("enable_current_range_output", 0) == 0:
                 timestamp_val = int.from_bytes(frame[2:7], byteorder="big")
                 timestamp_unit = "us"
                 real = struct.unpack(">f", frame[7:11])[0]
                 imag = struct.unpack(">f", frame[11:15])[0]
-            elif (
-                length == 0x0F
-                and measurement_settings.get("enable_current_range_output", 0) != 0
-            ):
+            elif length == 0x0F and measurement_settings.get("enable_current_range_output", 0) != 0:
                 timestamp_val = struct.unpack(">I", frame[2:6])[0]
                 timestamp_unit = "ms"
                 current_range_val = frame[6]
