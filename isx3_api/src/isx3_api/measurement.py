@@ -149,7 +149,7 @@ class Measurement:
         plt.pause(0.01)
 
     def measurement(self, config_path: str | None = None) -> None:
-        """Führt Frequenz-Sweeps durch (direkt oder über MUX32, optional mit Skalierung & Kompensation)."""
+        """Führt Frequenz-Sweeps durch (direkt über Main Port oder über MUX32)."""
         if not config_path:
             config_path = select_config_file()
             if not config_path:
@@ -161,7 +161,7 @@ class Measurement:
         self.measurement_queue = self.config_builder.generate_measurement_queue()
         self.plot_type = self.measurement_settings.get("plot_type", "bode")
 
-        # 1. Konfiguration robust auslesen (kompatibel mit altem und neuem ConfigParser)
+        # 1. Konfiguration robust auslesen
         mux_enabled = bool(self.measurement_settings.get("mux_enabled", False))
         mux_mode = int(self.measurement_settings.get("mux_mode", 4))
         raw_sensors = str(self.measurement_settings.get("mux_active_sensors", "8"))
@@ -171,8 +171,11 @@ class Measurement:
         comp_file = str(self.measurement_settings.get("compensation_open_file", "calibration/open_calibration.h5"))
 
         scale_factor = float(self.measurement_settings.get("hardware_scale_factor", 1.0))
+        main_fe_mode = int(self.measurement_settings.get("measurement_mode", 2))
+        c_range = int(self.measurement_settings.get("current_range", 1))
+        v_range = int(self.measurement_settings.get("voltage_range", 1))
 
-        # Fallback-Check direkt auf der INI-Datei, falls ein älterer config_handler genutzt wird
+        # Fallback-Check direkt auf der INI-Datei
         ini_direct = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
         if ini_direct.read(config_path, encoding="utf-8"):
             for sec in ini_direct.sections():
@@ -186,6 +189,9 @@ class Measurement:
                     comp_file = ini_direct.get(sec, "open_file", fallback=comp_file)
                 elif sec.lower() == "frontend":
                     scale_factor = ini_direct.getfloat(sec, "hardware_scale_factor", fallback=scale_factor)
+                    main_fe_mode = ini_direct.getint(sec, "measurement_mode", fallback=main_fe_mode)
+                    c_range = ini_direct.getint(sec, "current_range", fallback=c_range)
+                    v_range = ini_direct.getint(sec, "voltage_range", fallback=v_range)
 
         # 2. Sensor-Liste parsen
         active_sensors = []
@@ -218,15 +224,25 @@ class Measurement:
 
         self.device.set_options(settings=self.measurement_settings)
 
+        # 6. Kanal- und Modus-Zuweisung (MUX = Channel 2 vs. Main Port = Channel 1)
         if mux_enabled:
             fe_mode = 2 if mux_mode == 4 else 1
-            self.measurement_settings["measurement_channel"] = 2
-            self.measurement_settings["measurement_mode"] = fe_mode
-            for step in self.measurement_queue:
-                step["measurement_channel"] = 2
-                step["measurement_mode"] = fe_mode
+            fe_chan = 2
+        else:
+            fe_mode = main_fe_mode
+            fe_chan = 1
 
-        c_range = int(self.measurement_settings.get("current_range", 1))
+        self.measurement_settings["measurement_channel"] = fe_chan
+        self.measurement_settings["measurement_mode"] = fe_mode
+        self.measurement_settings["current_range"] = c_range
+        self.measurement_settings["voltage_range"] = v_range
+
+        for step in self.measurement_queue:
+            step["measurement_channel"] = fe_chan
+            step["measurement_mode"] = fe_mode
+            step["current_range"] = c_range
+            step["voltage_range"] = v_range
+
         print(f"[INFO] Mess-Queue generiert ({len(self.measurement_queue)} Frequenzpunkte pro Spektrum).")
         print(f"[INFO] Current Range Index: {c_range} | Hardware-Scale-Faktor: {scale_factor:.4f}")
         if comp_enabled and self.compensator.is_loaded():
@@ -235,9 +251,9 @@ class Measurement:
             print("[INFO] Rohdaten-Messung (keine Software-Kompensation).")
 
         if mux_enabled:
-            print(f"[INFO] MUX32 aktiv ({mux_mode}-Leiter) | Geplante Sensoren: {active_sensors}")
+            print(f"[INFO] MUX32 aktiv ({mux_mode}-Leiter, Channel 2) | Geplante Sensoren: {active_sensors}")
         else:
-            print("[INFO] Messung über Frontbuchsen (MAIN PORT, kein MUX).")
+            print(f"[INFO] Messung über Frontbuchsen (MAIN PORT, Channel 1, Mode={fe_mode}).")
         print("[INFO] Messung läuft. Zum Stoppen 'Strg + C' im Terminal drücken.\n")
 
         try:
@@ -250,7 +266,7 @@ class Measurement:
                     time.sleep(switch_delay)
                 else:
                     self.device.active_mux_pins = None
-                    print(f"\n--- Starte Messdurchlauf über Hauptbuchsen ---")
+                    print(f"\n--- Starte Messdurchlauf über Hauptbuchsen (MAIN PORT) ---")
 
                 self.current_results = []
 
@@ -259,17 +275,14 @@ class Measurement:
                         current_setup, self.measurement_settings
                     )
 
-                    # Unskalierte Hardware-Rohdaten sichern, falls Skalierung oder Kompensation aktiv ist
                     if abs(scale_factor - 1.0) > 1e-6 or (comp_enabled and self.compensator.is_loaded()):
                         step_results["real_raw"] = list(step_results["real"])
                         step_results["imag_raw"] = list(step_results["imag"])
 
-                    # 1. Hardware-Skalierungsfaktor anwenden
                     if abs(scale_factor - 1.0) > 1e-6:
                         step_results["real"] = [r * scale_factor for r in step_results["real"]]
                         step_results["imag"] = [i * scale_factor for i in step_results["imag"]]
 
-                    # 2. Optionale Open-Kompensation anwenden
                     if comp_enabled and self.compensator.is_loaded():
                         current_s_idx = sensor_idx if mux_enabled else 0
                         re_comp, im_comp = self.compensator.compensate_spectrum(
@@ -281,7 +294,6 @@ class Measurement:
                         step_results["real"] = re_comp
                         step_results["imag"] = im_comp
 
-                    # In HDF5 ablegen
                     self.save_measurement(
                         results_data=step_results,
                         timestamp=timestamp,
@@ -290,7 +302,6 @@ class Measurement:
                         sensor_idx=sensor_idx if mux_enabled else 0,
                     )
 
-                    # Live-Plot aktualisieren
                     self.current_results.append(step_results)
                     self.update_live_plot(
                         results=step_results,

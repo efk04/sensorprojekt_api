@@ -159,8 +159,8 @@ class ConfigParser:
         sec = self._find_section("Frontend")
         return FrontendConfig(
             measurement_mode=self.parser.getint(sec, "measurement_mode", fallback=2),
-            measurement_channel=self.parser.getint(sec, "measurement_channel", fallback=2),
-            current_range=self.parser.getint(sec, "current_range", fallback=2),
+            measurement_channel=self.parser.getint(sec, "measurement_channel", fallback=1),
+            current_range=self.parser.getint(sec, "current_range", fallback=1),
             voltage_range=self.parser.getint(sec, "voltage_range", fallback=1),
             hardware_scale_factor=self.parser.getfloat(sec, "hardware_scale_factor", fallback=1.0),
         )
@@ -239,7 +239,6 @@ class ConfigParser:
         for section, values in nested_dict.items():
             if isinstance(values, dict):
                 for key, val in values.items():
-                    # Verhindert Namenskollisionen bei 'enabled' und 'mode'
                     if not use_prefix and section in ("mux", "compensation"):
                         flat_key = f"{section}_{key}"
                     else:
@@ -296,8 +295,17 @@ class ConfigBuilder:
         mux_enabled = bool(self.settings.get("mux_enabled", False))
         mux_mode = int(self.settings.get("mux_mode", 4))
 
-        meas_mode = (2 if mux_mode == 4 else 1) if mux_enabled else int(self.settings.get("measurement_mode", 2))
-        meas_chan = 2 if mux_enabled else int(self.settings.get("measurement_channel", 1))
+        # WICHTIG: Wenn MUX aktiv -> Channel 2 (Extension Port).
+        # Wenn MUX inaktiv -> IMMER Channel 1 (BNC Main Port) erzwingen!
+        if mux_enabled:
+            meas_mode = 2 if mux_mode == 4 else 1
+            meas_chan = 2
+        else:
+            meas_mode = int(self.settings.get("measurement_mode", 2))
+            meas_chan = 1
+
+        self.settings["measurement_mode"] = meas_mode
+        self.settings["measurement_channel"] = meas_chan
 
         for index, freq in enumerate(frequency_queue_hz):
             single_setup = {
@@ -306,7 +314,7 @@ class ConfigBuilder:
                 "enable_current_range_output": int(bool(self.settings.get("enable_current_range_output", False))),
                 "measurement_mode": meas_mode,
                 "measurement_channel": meas_chan,
-                "current_range": int(self.settings.get("current_range", 2)),
+                "current_range": int(self.settings.get("current_range", 1)),
                 "voltage_range": int(self.settings.get("voltage_range", 1)),
                 "hardware_scale_factor": float(self.settings.get("hardware_scale_factor", 1.0)),
                 "counter_port": int(self.settings.get("counter_port", 0)),

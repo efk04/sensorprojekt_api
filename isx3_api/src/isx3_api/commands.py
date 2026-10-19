@@ -48,7 +48,6 @@ class ISX3:
         self.device: serial.Serial | None = None
         self.serial_protocol = None
         self.print_msg = True
-        # Speichert das aktuell aktive MUX32-Pin-Quartett (CE, RE, WS, WE)
         self.active_mux_pins: tuple[int, int, int, int] | None = None
 
     def is_port_available(self, port: str) -> bool:
@@ -139,7 +138,7 @@ class ISX3:
                     continue
                 msg_len = len_b[0]
                 payload = self.device.read(msg_len)
-                self.device.read(1)  # End-Tag konsumieren
+                self.device.read(1)
                 if tag == 0x1D:
                     print(f"[STATUS-INFO] ISX-3 Systemnachricht (0x1D): Payload={payload.hex()}")
                 continue
@@ -236,24 +235,33 @@ class ISX3:
 
     def set_frequency_setup(self, current_setup: dict) -> None:
         """
-        Konfiguriert ausschließlich den Frequenzpunkt im Einzelfrequenz-Modus (0xB6 0x02).
-        Frontend- und MUX-Einstellungen werden einmalig vor dem Sweep vorgenommen
-        und nicht bei jedem Frequenzpunkt überschrieben!
+        Konfiguriert Frequenzpunkt (0xB6), Frontend (0xB0) und MUX32-Kanal (0xB2)
+        in der exakt vom ISX-3 geforderten Reihenfolge:
+          1. 0xB6 0x01 (Init Setup)
+          2. 0xB6 0x02 (Add single frequency point + EOPs)
+          3. 0xB0 FF FF FF (Clear Channel & MUX Stack)
+          4. 0xB0 [mode, channel, current_range, voltage_range] (Set Frontend)
+          5. 0xB2 [CE, RE, WS, WE] (Add MUX32 Channel to Stack, falls MUX aktiv)
         """
+        measurement_mode = int(current_setup.get("measurement_mode", 2))
+        # WICHTIG: Wenn active_mux_pins gesetzt ist -> immer Channel 2 (Extension Port),
+        #          wenn active_mux_pins None ist -> immer Channel 1 (BNC Main Port)!
+        measurement_channel = 2 if self.active_mux_pins is not None else 1
+        current_range = int(current_setup.get("current_range", 1))
+        voltage_range = int(current_setup.get("voltage_range", 1))
+
         frequency = float(current_setup["frequency"])
         precision = float(current_setup.get("precision", 1.0))
         amplitude = float(current_setup.get("amplitude", 0.0001))
-        step_id = int(current_setup.get("id", 1))
         excitation_type = int(current_setup.get("excitation_type", 2))
         point_delay_us = int(current_setup.get("point_delay_us", 0))
         phase_sync = bool(current_setup.get("phase_sync", False))
+        step_id = int(current_setup.get("id", 1))
 
-        # 1. Beim allerersten Punkt des Sweeps das Frequenz-Setup im ISX-3 initialisieren (0xB6 0x01)
-        if step_id == 1:
-            time.sleep(0.02)
-            self._send_command(self.CMD_SETUP_FREQUENCY, bytes([0x01]))
+        # 1. Frequenz-Setup initialisieren (0xB6 0x01)
+        self._send_command(self.CMD_SETUP_FREQUENCY, bytes([0x01]))
 
-        # 2. Extended Options (EOPs) vorbereiten
+        # 2. Frequenzpunkt inkl. Extended Options (EOP) setzen (0xB6 0x02)
         eops = b""
         if point_delay_us > 0:
             eops += bytes([0x01]) + struct.pack(">I", int(point_delay_us))
@@ -262,13 +270,24 @@ class ISX3:
         if excitation_type != 1:
             eops += bytes([0x03]) + struct.pack(">I", int(excitation_type))
 
-        # 3. Einzelnen Frequenzpunkt zur Queue hinzufügen (0xB6 0x02)
-        payload = (
-            bytes([0x02])
-            + struct.pack(">fff", frequency, precision, amplitude)
-            + eops
-        )
-        self._send_command(self.CMD_SETUP_FREQUENCY, payload)
+        freq_payload = bytes([0x02]) + struct.pack(">fff", frequency, precision, amplitude) + eops
+        self._send_command(self.CMD_SETUP_FREQUENCY, freq_payload)
+
+        # 3. Frontend- und MUX-Channel-Stack leeren (0xB0 FF FF FF)
+        self._send_command(self.CMD_SETUP_FRONTEND, bytes([0xFF, 0xFF, 0xFF]))
+
+        # 4. Analoge Frontend-Einstellungen setzen (0xB0)
+        fe_payload = struct.pack(">BBBB", measurement_mode, measurement_channel, current_range, voltage_range)
+        self._send_command(self.CMD_SETUP_FRONTEND, fe_payload)
+
+        if step_id == 1:
+            port_str = "Extension Port / MUX (Ch 2)" if measurement_channel == 2 else "Main Port / BNC (Ch 1)"
+            mode_str = f"{measurement_mode} ({'4-Leiter' if measurement_mode == 2 else '2-Leiter'})"
+            print(f"[FRONTEND 0xB0] {port_str} | Mode={mode_str} | CurrentRange={current_range} | VoltageRange={voltage_range}")
+
+        # 5. Wenn MUX32 aktiv ist (Channel 2), MUX-Pins (0xB2) nach 0xB0 auf den Stack legen
+        if self.active_mux_pins is not None:
+            self.set_extension_port(*self.active_mux_pins)
 
     def reset_compensation(self) -> None:
         """Setzt die Kompensationsdaten des aktuellen Setups zurück (Befehl 0xB6 0x17 0x01)."""
