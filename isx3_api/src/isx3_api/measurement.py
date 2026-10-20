@@ -7,6 +7,7 @@ Measurement class for:
 """
 
 #Imports
+from ast import While
 from datetime import datetime
 import time
 import matplotlib.pyplot as plt
@@ -76,7 +77,7 @@ class Measurement:
         plt.rcParams['keymap.quit'] = [] # deactivates the command q for refreshing plot
 
 
-    def start_measurement(self, current_setup, measurement_settings):
+    def start_measurement(self, current_setup, measurement_settings, current_id):
         """
         Starts the measurement for one measurement setup and reads the results.
 
@@ -93,8 +94,8 @@ class Measurement:
         #start measurment via other library
         #give back data to self.measurment_data
         number_of_spectra = current_setup["number_of_spectra"] #spectra counts the measurement repetitions
-        id = current_setup["id"]
-
+        id = current_setup["id"]#id of the measurement setup
+        current_id = current_id #id of measurement (number of measurement cycle + number of single measurement in the cycle)
         if not self.device:
             print("Device not connected.")
             return None, None
@@ -113,8 +114,10 @@ class Measurement:
             #print(f"Results for Measurement Nr. {id}:", results) #debug
 
         #include frequency as list in results
-        frequency = [current_setup["frequency"]]*len(results["id"]) #spectra
+        frequency = []
+        frequency.append(current_setup["frequency"]*number_of_spectra)
         results["frequencies"].append(frequency)
+        results["current_id"].append(current_id)
 
         return results, timestamp_measurement
 
@@ -224,7 +227,7 @@ class Measurement:
         
 
 
-    def update_live_plot(self, results, current_setup, current_results, len_measurement_queue):
+    def update_live_plot(self, test_current_id,results, current_results, len_measurement_queue):
         """
         Updates the live plot with new data.
 
@@ -243,13 +246,59 @@ class Measurement:
 
         match self.plot_type:
             case "impedance_frequency":
-                self.plot_templates.impedance_frequency(live_results = res, current_results = current_results, len_measurement_queue = len_measurement_queue)
+                self.plot_templates.impedance_frequency( test_current_id =  test_current_id, live_results = res, current_results = current_results, len_measurement_queue = len_measurement_queue)
             case "nyquist":
-                self.plot_templates.nyquist(live_results = res, current_results = current_results, len_measurement_queue = len_measurement_queue)
+                self.plot_templates.nyquist(test_current_id = test_current_id, live_results = res, current_results = current_results, len_measurement_queue = len_measurement_queue)
             case _:   # "bode" und alle unbekannten Werte
-                self.plot_templates.bode(live_results = res, current_results = current_results, len_measurement_queue = len_measurement_queue)
+                self.plot_templates.bode(test_current_id = test_current_id, live_results = res, current_results = current_results, len_measurement_queue = len_measurement_queue)
 
         plt.pause(0.1)#short break
+    #test
+    def simulate_test_measurement(self, icm):
+        print(icm)
+        #temp function to simulate a measurement for testing the live plot
+        test_results = {
+            "id": [],
+            "real": [],
+            "imag": [],
+            "timestamp": [],
+
+            "frequencies": []
+        }
+
+        # Mapping: Welcher Dictionary-Key gehört zu welchem HDF5-Namen im Bild?
+        h5_mapping = {
+            "current_id": "frequency_id",         #
+            "real": "real_part",          #[cite: 1]
+            "imag": "imaginary_part",     #[cite: 1]
+            "timestamp": "timestamp",     #[cite: 1]
+            "frequencies": "frequency",   #[cite: 1]
+            # Falls timestamp_unit oder current_range existieren, hier eintragen:
+
+        }
+        # Leeres Dictionary initialisieren
+        test_results = {}
+        file_path = r"C:\Users\turbo\OneDrive\Dokumente\Studium\HTWK\Sensorprojekt\sensorprojekt_api\isx3_api\src\isx3_api\measurement_results_20261002-101043.h5"
+        #file_path = r"C:\Users\turbo\OneDrive\Dokumente\Studium\HTWK\Sensorprojekt\sensorprojekt_api\measurements\measurement_results_20261002-121829.h5"
+        # Datei sicher im Lesemodus öffnen
+        with h5py.File(file_path, 'r') as f:
+            group_path = f"Measurement_{icm}"
+            
+            if group_path in f:
+                group = f[group_path]
+                
+                for target_key, h5_name in h5_mapping.items():
+                    if h5_name in group:
+                        # Daten einlesen und in Python-Listen konvertieren
+                        test_results[target_key] = group[h5_name][()].tolist()
+                    else:
+
+                        print(f"Hinweis: Datensatz '{h5_name}' existiert nicht in der Gruppe.")
+            
+                
+        
+        time.sleep(0.5)
+        return test_results, 1
 
 
     #Methode for main loop
@@ -296,7 +345,7 @@ class Measurement:
         self.config_builder = ConfigBuilder(config_path)
 
         #creates a new H5 file for the whole measurement campaign, and saves the data in H5 format under "measurements"
-        self.create_h5_file()
+        self.create_h5_file() 
 
         #select plot type
         self.plot_type = self.config_builder.parser.parse_api_settings().plot_type
@@ -305,13 +354,13 @@ class Measurement:
         self.measurement_settings = self.config_builder.parser.parse_as_flat_dict(False)
         
         #connects device via USB
-        serial_connection = self.device.connect_device_fs(settings = self.measurement_settings)
+        serial_connection = self.device.connect_device_fs(settings = self.measurement_settings) 
 
         #saves the whole config file as a group in the h5-file
         self.safe_measurement_settings(config_path = config_path)
         
         #load measurment settings (Options, (Extension port settings), DC bias, SyncTime ) in device 
-        self.device.set_options(settings=self.measurement_settings)
+        self.device.set_options(settings=self.measurement_settings) 
 
 
         #creats a queue of all measurement setups to be executed in the measurement loop
@@ -319,7 +368,7 @@ class Measurement:
         len_measurement_queue = len(measurement_setup_queue)
         print("Press [e] to stop the measurement manually.")
         
-        icm = 0 #running index for continuous measurement
+        icm = 0 #running index for continuous measurement, counts number of cycles 
 
         while True:
             #Measurement loop for all frequency setups in measurement_setup_queue
@@ -330,35 +379,39 @@ class Measurement:
                 break
 
             self.current_results = [] #clear current results
-            plt.cla()
+            
 
             icm = icm + 1 
+            nic = 0 #running index for number of measurements in the one cycle, reset after evry cycle
             while temp_measurement_setup_queue:
-
+                
                 #get next measurement setup from measurement_setup_queue
                 current_setup = temp_measurement_setup_queue.pop(0)
-                current_id = str(icm)+"."+str(current_setup["id"])
+                
                 #print(f'\n----- Starts Measurement with ID:{current_id} ---') #id, bzw anderen Zähler hinzufügen, um überblick über ausgeführte Messungen zu behalten
                 #print(current_setup)
                 #load frequnecy setup from measurement_setup_queue in device
-                self.device.set_frequency_setup(current_setup=current_setup)
+                self.device.set_frequency_setup(current_setup=current_setup) 
 
-                #start measurment and collect data
-                results = self.start_measurement(current_setup = current_setup, measurement_settings =  self.measurement_settings)
-                #print(results)
+                #start measurment and collect data 
+                current_id = str(icm)+"."+str(nic+1) #set id of measurement
+                results = self.start_measurement(current_setup = current_setup, measurement_settings =  self.measurement_settings, current_id = current_id)
+
 
                 self.current_results.append(results[0]) #get all measurements from one measurement cycle
-
                 #update live plot with new data
-                self.update_live_plot(results = results, current_setup=current_setup, current_results = self.current_results, len_measurement_queue = len_measurement_queue)
+                test_current_id = 0
+                self.update_live_plot(test_current_id = test_current_id, results = results, current_results = self.current_results, len_measurement_queue = len_measurement_queue)
 
                 #save measurment data in H5 format
-                self.safe_measurment(results = results, current_setup=current_setup, icm = icm)
+                #self.safe_measurment(results = results, current_setup=current_setup, current_id = current_id)
 
                 
                 if keyboard.is_pressed('e'):
                     self.manual_stop = True
                     print("manual measurement stop by pressing [e]")
+                    plt.ioff() #interactive mode off
+                    plt.show() 
                     return self.manual_stop
 
 
@@ -366,11 +419,10 @@ class Measurement:
             if self.config_builder.parser.parse_api_settings().continuous_measurement == False:
                 break
 
-
-
         print('\n----- finished all measurements -----')
-        serial_connection.close()
+        #serial_connection.close()
 
         #after finishing measurement loop, keep the plot open for further analysis, until user closes it
         plt.ioff() #interactive mode off
         plt.show() #keep plot open until user closes it
+

@@ -257,7 +257,7 @@ class ISX3:
         return results
 
 
-    def read_measurement_data(self, spectra, timeout, measurement_settings):
+    def read_measurement_data(self, spectra,timeout, measurement_settings):
         """
         Reads measurement data frames from the ISX3 device.
 
@@ -286,8 +286,8 @@ class ISX3:
         current_range = 0
         timestamp_ms = 0
         timestamp_us = 0
-
-        results = {"id": [],
+        
+        results = {"current_id": [],
                    "real": [],
                    "imag": [],
                    "timestamp":[],
@@ -296,7 +296,7 @@ class ISX3:
                    "frequencies": []
         }
 
-        while len(results["id"]) < spectra:
+        while len(results["real"]) < spectra:
             tag = self.device.read(1)
             while tag and tag[0] != 0xB8:
                 tag = self.device.read(1)
@@ -348,7 +348,7 @@ class ISX3:
                 )
 
             #write results      
-            results["id"].append(freq_id),
+            #results["id"].append(freq_id),
             results["real"].append(real),
             results["imag"].append(imag),
                     

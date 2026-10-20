@@ -409,7 +409,7 @@ class ConfigBuilder:
         self.settings = self.parser.parse_as_flat_dict(False)
         #print("Settings from config: ", self.settings)
 
-        #frequency_queue_hz = [self.settings["frequency_hz"]]
+        frequency_queue_hz = self.settings["frequency_hz"]
         match self.settings["mode"]:
             case "auto": #turns the "auto"/"sweep" options in a list of frequencies
                 if self.settings["scale"] == "linear":
