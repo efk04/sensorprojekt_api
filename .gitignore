@@ -8,7 +8,7 @@ _build/
 #datatype
 *.h5
 *.png
-*.ini
+
 
 
 #files
