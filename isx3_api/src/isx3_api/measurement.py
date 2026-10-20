@@ -253,52 +253,6 @@ class Measurement:
                 self.plot_templates.bode(test_current_id = test_current_id, live_results = res, current_results = current_results, len_measurement_queue = len_measurement_queue)
 
         plt.pause(0.1)#short break
-    #test
-    def simulate_test_measurement(self, icm):
-        print(icm)
-        #temp function to simulate a measurement for testing the live plot
-        test_results = {
-            "id": [],
-            "real": [],
-            "imag": [],
-            "timestamp": [],
-
-            "frequencies": []
-        }
-
-        # Mapping: Welcher Dictionary-Key gehört zu welchem HDF5-Namen im Bild?
-        h5_mapping = {
-            "current_id": "frequency_id",         #
-            "real": "real_part",          #[cite: 1]
-            "imag": "imaginary_part",     #[cite: 1]
-            "timestamp": "timestamp",     #[cite: 1]
-            "frequencies": "frequency",   #[cite: 1]
-            # Falls timestamp_unit oder current_range existieren, hier eintragen:
-
-        }
-        # Leeres Dictionary initialisieren
-        test_results = {}
-        file_path = r"C:\Users\turbo\OneDrive\Dokumente\Studium\HTWK\Sensorprojekt\sensorprojekt_api\isx3_api\src\isx3_api\measurement_results_20261002-101043.h5"
-        #file_path = r"C:\Users\turbo\OneDrive\Dokumente\Studium\HTWK\Sensorprojekt\sensorprojekt_api\measurements\measurement_results_20261002-121829.h5"
-        # Datei sicher im Lesemodus öffnen
-        with h5py.File(file_path, 'r') as f:
-            group_path = f"Measurement_{icm}"
-            
-            if group_path in f:
-                group = f[group_path]
-                
-                for target_key, h5_name in h5_mapping.items():
-                    if h5_name in group:
-                        # Daten einlesen und in Python-Listen konvertieren
-                        test_results[target_key] = group[h5_name][()].tolist()
-                    else:
-
-                        print(f"Hinweis: Datensatz '{h5_name}' existiert nicht in der Gruppe.")
-            
-                
-        
-        time.sleep(0.5)
-        return test_results, 1
 
 
     #Methode for main loop
