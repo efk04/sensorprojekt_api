@@ -1,6 +1,6 @@
 """
 auswertung_test.py - Universeller Validierungsvergleich zwischen Sciospec-GUI und Python-API.
-Unterstützt sowohl MUX32-Kanalstrukturen als auch flache Main-Port-Ordner.
+Optimiert für MUX32-Messungen mit getrennten Fenstern für Betrag (|Z|) und Phase (φ).
 """
 
 import io
@@ -89,25 +89,20 @@ def parse_sciospec_folder(base_dir: str) -> dict[int, dict[str, np.ndarray]]:
             pass
         return found
 
-    # 1. Prüfen, ob direkte MUX-Unterordner im gewählten Pfad liegen
     mux_entries = find_mux_folders(base_dir)
 
-    # 2. Falls nicht, rekursiv im gesamten Verzeichnis nach MUX-Ordnern suchen (z.B. wenn man den 'setup'-Ordner auswählt)
     if not mux_entries:
         for root, dirs, _ in os.walk(base_dir):
             for d in dirs:
                 if pin_regex.search(d):
                     full_path = os.path.join(root, d)
-                    # Nur hinzufügen, wenn nicht doppelt
                     if full_path not in [e.path for e in mux_entries]:
-                        # Simuliere ein scandir-Entry-Objekt via custom class oder Pfadliste
                         class DummyEntry:
                             def __init__(self, name, path):
                                 self.name = name
                                 self.path = path
                         mux_entries.append(DummyEntry(d, full_path))
 
-    # 3. FALLBACK FÜR MAIN-PORT: Wenn gar keine MUX-Ordner existieren, suche alle .spec-Dateien (auch in "MAIN PORT"-Unterordnern)
     if not mux_entries:
         spec_files_root = []
         for root, _, files in os.walk(base_dir):
@@ -136,7 +131,6 @@ def parse_sciospec_folder(base_dir: str) -> dict[int, dict[str, np.ndarray]]:
         else:
             return {}
 
-    # MUX32-Auswertung
     results = {}
     for entry in mux_entries:
         match = pin_regex.search(entry.name)
@@ -269,7 +263,6 @@ def main():
     gui_data = parse_sciospec_folder(scio_dir)
     py_data = parse_hdf5_file(h5_path)
 
-    # Universelles Mapping: Wenn Schlüssel nicht matchen, aber Daten da sind, Keys erzwingen
     if len(gui_data) == 1 and len(py_data) == 1:
         g_key = list(gui_data.keys())[0]
         p_key = list(py_data.keys())[0]
@@ -284,39 +277,61 @@ def main():
 
     analyze_and_print_errors(gui_data, py_data, common_sensors)
 
-    num_plots = len(common_sensors)
-    if num_plots == 1:
-        fig, ax = plt.subplots(figsize=(10, 6))
-        axes = [ax]
-    else:
-        rows = (num_plots + 1) // 2
-        fig, axes = plt.subplots(rows, 2, figsize=(14, 3 * rows), sharex=True)
-        axes = axes.flatten()
+    # Aufteilung in Blöcke von maximal 8 Sensoren
+    chunk_size = 8
+    sensor_chunks = [common_sensors[i:i + chunk_size] for i in range(0, len(common_sensors), chunk_size)]
 
     colormap = plt.get_cmap("tab10")
 
-    for idx, s_idx in enumerate(common_sensors):
-        ax = axes[idx] if idx < len(axes) else axes[-1]
-        color = colormap(idx % 10)
-        
-        g = gui_data[s_idx]
-        p = py_data[s_idx]
+    for chunk_idx, chunk in enumerate(sensor_chunks):
+        # Fenster 1: Impedanzbetrag (|Z|)
+        fig_z, axes_z = plt.subplots(4, 2, figsize=(14, 11), sharex=True)
+        axes_z = axes_z.flatten()
 
-        ax.plot(g["frequency"], g["z_mag"], "-", color=color, linewidth=2.0, label=f"Kanal #{s_idx} (GUI)")
-        ax.plot(p["frequency"], p["z_mag"], "--", color="black", linewidth=1.2, label=f"Kanal #{s_idx} (API)")
+        # Fenster 2: Phase (φ)
+        fig_phi, axes_phi = plt.subplots(4, 2, figsize=(14, 11), sharex=True)
+        axes_phi = axes_phi.flatten()
 
-        ax.set_xscale("log")
-        ax.set_yscale("log")
-        ax.set_ylabel(r"$|Z|$ / $\Omega$")
-        ax.set_title(f"Messvergleich (Kanal #{s_idx})", fontsize=10, pad=3)
-        ax.grid(True, which="both", linestyle="--", alpha=0.4)
-        ax.legend(loc="upper right", fontsize=8)
+        for idx, s_idx in enumerate(chunk):
+            if idx >= len(axes_z):
+                break
+            
+            color = colormap(idx % 10)
+            g = gui_data[s_idx]
+            p = py_data[s_idx]
 
-    for ax in axes[-2:]:
-        ax.set_xlabel("Frequenz $f$ / Hz")
+            # --- Plot in Fenster 1: Betrag |Z| ---
+            ax_z = axes_z[idx]
+            ax_z.plot(g["frequency"], g["z_mag"], "-", color=color, linewidth=1.8, label=f"|Z| (GUI)")
+            ax_z.plot(p["frequency"], p["z_mag"], "--", color="black", linewidth=1.0, label=f"|Z| (API)")
+            ax_z.set_xscale("log")
+            ax_z.set_yscale("log")
+            ax_z.set_ylabel(r"$|Z|$ / $\Omega$")
+            ax_z.set_title(f"Kanal #{s_idx}", fontsize=9, pad=2)
+            ax_z.grid(True, which="both", linestyle="--", alpha=0.4)
+            ax_z.legend(loc="upper right", fontsize=6)
 
-    fig.suptitle("Validierungsvergleich: Sciospec GUI vs. Python-API (Main Port / MUX)", fontsize=12)
-    fig.tight_layout()
+            # --- Plot in Fenster 2: Phase ---
+            ax_p = axes_phi[idx]
+            ax_p.plot(g["frequency"], g["phase"], "-", color=color, linewidth=1.8, label=f"Phase (GUI)")
+            ax_p.plot(p["frequency"], p["phase"], "--", color="black", linewidth=1.0, label=f"Phase (API)")
+            ax_p.set_xscale("log")
+            ax_p.set_ylabel(r"Phase / °")
+            ax_p.set_title(f"Kanal #{s_idx}", fontsize=9, pad=2)
+            ax_p.grid(True, which="both", linestyle="--", alpha=0.4)
+            ax_p.legend(loc="upper right", fontsize=6)
+
+        # Nicht genutzte Subplots bei unvollständigen Chunks ausblenden
+        for j in range(len(chunk), len(axes_z)):
+            fig_z.delaxes(axes_z[j])
+            fig_phi.delaxes(axes_phi[j])
+
+        fig_z.suptitle(f"MUX-Validierung: Impedanzbetrag |Z| (Teil {chunk_idx + 1} von {len(sensor_chunks)})", fontsize=11)
+        fig_z.tight_layout()
+
+        fig_phi.suptitle(f"MUX-Validierung: Phase φ (Teil {chunk_idx + 1} von {len(sensor_chunks)})", fontsize=11)
+        fig_phi.tight_layout()
+
     plt.show()
 
 
