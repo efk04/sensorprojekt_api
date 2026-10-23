@@ -8,7 +8,6 @@ import numpy as np
 
 
 def parse_frequency_input(value_str: str | float | int) -> float:
-    """Wandelt Eingaben wie '10k', '5.5M', '10M' oder '1000' sauber in Float (Hz) um."""
     if isinstance(value_str, (int, float)):
         return float(value_str)
     value_str = str(value_str).strip().lower()
@@ -34,10 +33,6 @@ def parse_frequency_input(value_str: str | float | int) -> float:
 
 
 def parse_precision_input(val: str | float | int) -> float:
-    """
-    Wandelt Precision-Eingaben (Hersteller-Presets 0..3 oder freie Float-Werte 0.0..10.0)
-    in einen gültigen Float im Bereich [0.0, 10.0] um (Handbuch S. 15, S. 36, S. 66, S. 118).
-    """
     if isinstance(val, (int, float)):
         return float(np.clip(float(val), 0.0, 10.0))
 
@@ -52,7 +47,6 @@ def parse_precision_input(val: str | float | int) -> float:
     if s in preset_map:
         return preset_map[s]
 
-    # Falls Format "1 (medium - default)" aus der GUI-Combobox kommt: erstes Token prüfen
     first_token = s.split()[0].replace(",", ".")
     try:
         num = float(first_token)
@@ -68,7 +62,6 @@ def parse_precision_input(val: str | float | int) -> float:
 class ApiSettingsConfig:
     plot_type: str
     continuous_measurement: bool
-    use_hardware_sweep: bool
     live_plot_enabled: bool
     live_plot_mode: str
 
@@ -104,13 +97,6 @@ class MuxConfig:
     channel: int
     active_sensors: str
     switch_delay_s: float
-
-
-@dataclass
-class CompensationConfig:
-    enabled: bool
-    open_file: str
-    short_file: str
 
 
 @dataclass
@@ -159,7 +145,6 @@ class DeviceConfig:
     options: OptionsConfig
     frontend: FrontendConfig
     mux: MuxConfig
-    compensation: CompensationConfig
     extension_port: ExtensionPortConfig
     frequency_setup: FrequencySetupConfig
     dc_bias: DCBiasConfig
@@ -168,8 +153,6 @@ class DeviceConfig:
 
 
 class ConfigParser:
-    """Liest und validiert die ISX-3 INI-Konfigurationsdatei."""
-
     def __init__(self, file_path: str):
         self.file_path = file_path
         self.parser = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
@@ -190,7 +173,6 @@ class ConfigParser:
             options=self._parse_options(),
             frontend=self._parse_frontend(),
             mux=self._parse_mux(),
-            compensation=self._parse_compensation(),
             extension_port=self._parse_extension_port(),
             frequency_setup=self._parse_frequency_setup(),
             dc_bias=self._parse_dc_bias(),
@@ -205,7 +187,7 @@ class ConfigParser:
             port=self.parser.get(sec, "port", fallback="COM12"),
             baudrate=self.parser.getint(sec, "baudrate", fallback=115200),
             ip_address=self.parser.get(sec, "ip_address", fallback="192.168.1.100"),
-            tcp_port=self.parser.getint(sec, "tcp_port", fallback=8888),
+            tcp_port=self.parser.getint(sec, "tcp_port", fallback=5000),
             tcp_watchdog_interval_s=self.parser.getint(sec, "tcp_watchdog_interval_s", fallback=60),
         )
 
@@ -233,14 +215,6 @@ class ConfigParser:
             channel=self.parser.getint(sec, "channel", fallback=2),
             active_sensors=self.parser.get(sec, "active_sensors", fallback="1-8"),
             switch_delay_s=self.parser.getfloat(sec, "switch_delay_s", fallback=0.10),
-        )
-
-    def _parse_compensation(self) -> CompensationConfig:
-        sec = self._find_section("Compensation")
-        return CompensationConfig(
-            enabled=self.parser.getboolean(sec, "enabled", fallback=False),
-            open_file=self.parser.get(sec, "open_file", fallback="calibration/open_calibration.h5"),
-            short_file=self.parser.get(sec, "short_file", fallback="calibration/short_calibration.h5"),
         )
 
     def _parse_extension_port(self) -> ExtensionPortConfig:
@@ -306,11 +280,13 @@ class ConfigParser:
         for section, values in nested_dict.items():
             if isinstance(values, dict):
                 for key, val in values.items():
-                    if not use_prefix and section in ("mux", "compensation"):
-                        flat_key = f"{section}_{key}"
+                    if not use_prefix and section == "mux":
+                        flat_key = f"mux_{key}"
+                        flat_dict[flat_key] = val
+                        flat_dict[key] = val
                     else:
                         flat_key = f"{section}_{key}" if use_prefix else key
-                    flat_dict[flat_key] = val
+                        flat_dict[flat_key] = val
         return flat_dict
 
     def parse_api_settings(self) -> ApiSettingsConfig:
@@ -320,15 +296,12 @@ class ConfigParser:
         return ApiSettingsConfig(
             plot_type=self.parser.get(sec, "plot_type", fallback="bode").strip().lower(),
             continuous_measurement=self.parser.getboolean(sec, "continuous_measurement", fallback=False),
-            use_hardware_sweep=self.parser.getboolean(sec, "use_hardware_sweep", fallback=False),
             live_plot_enabled=self.parser.getboolean(sec, "live_plot_enabled", fallback=True),
             live_plot_mode=self.parser.get(sec, "live_plot_mode", fallback="point").strip().lower(),
         )
 
 
 class ConfigBuilder:
-    """Erzeugt aus den Konfigurationsparametern eine Liste sequenzieller Messpunkte."""
-
     def __init__(self, config_path: str = "config/config.ini"):
         self.parser = ConfigParser(config_path)
         self.measurement_setup_queue: list[dict] = []
@@ -339,33 +312,102 @@ class ConfigBuilder:
         api_cfg = self.parser.parse_api_settings()
         self.settings["plot_type"] = api_cfg.plot_type
         self.settings["continuous_measurement"] = api_cfg.continuous_measurement
-        self.settings["use_hardware_sweep"] = api_cfg.use_hardware_sweep
         self.settings["live_plot_enabled"] = api_cfg.live_plot_enabled
         self.settings["live_plot_mode"] = api_cfg.live_plot_mode
         return self.settings
 
-    def generate_measurement_queue(self) -> list[dict]:
-        self.measurement_setup_queue = []
+    def parse_frequency_blocks(self) -> list[dict]:
+        """Liest mehrere Frequenzblöcke aus der INI (Unterstützung für Block 1, Block 2 etc.)."""
         self.settings = self.get_settings_from_config()
+        ini = self.parser.parser
+        blocks = []
 
+        # Prüfen, ob block-spezifische Keys existieren (z.B. block_1_start_hz)
+        block_indices = []
+        for sec in ini.sections():
+            if sec.lower() == "frequencyblocks":
+                for key in ini.options(sec):
+                    if key.startswith("block_") and "_start" in key:
+                        try:
+                            idx = int(key.split("_")[1])
+                            block_indices.append(idx)
+                        except ValueError:
+                            pass
+
+        if block_indices:
+            block_indices = sorted(list(set(block_indices)))
+            sec = "FrequencyBlocks"
+            global_prec = parse_precision_input(self.settings.get("precision", 1.0))
+            global_amp = float(self.settings.get("amplitude", 0.0001))
+            global_exc = int(self.settings.get("excitation_type", 2))
+            delay_ms = float(self.settings.get("point_delay_ms", 20.0))
+            phase_sync = int(bool(self.settings.get("phase_sync", False)))
+
+            for idx in block_indices:
+                start_f = parse_frequency_input(ini.get(sec, f"block_{idx}_start", fallback="100.0"))
+                stop_f = parse_frequency_input(ini.get(sec, f"block_{idx}_stop", fallback="1000.0"))
+                count = max(1, int(ini.getint(sec, f"block_{idx}_steps", fallback=10)))
+                scale = ini.get(sec, f"block_{idx}_scale", fallback="logarithmic").strip().lower()
+                prec = parse_precision_input(ini.get(sec, f"block_{idx}_precision", fallback=str(global_prec)))
+
+                blocks.append({
+                    "start_frequency_hz": start_f,
+                    "stop_frequency_hz": stop_f,
+                    "count": count,
+                    "scale": scale,
+                    "precision": prec,
+                    "amplitude": global_amp,
+                    "excitation_type": global_exc,
+                    "point_delay_ms": delay_ms,
+                    "point_delay_us": int(delay_ms * 1000.0),
+                    "phase_sync": phase_sync,
+                })
+            return blocks
+
+        # Fallback auf Standard-Einzelfrequenz / Standard-Sweep
         mode = str(self.settings.get("mode", "sweep")).strip().lower()
-        scale = str(self.settings.get("scale", "logarithmic")).strip().lower()
-
         if mode == "single":
-            frequency_queue_hz = [parse_frequency_input(f) for f in self.settings.get("frequency_hz", [1000.0])]
-            start_f = frequency_queue_hz[0]
-            stop_f = frequency_queue_hz[-1]
+            raw_freqs = self.settings.get("frequency_hz", [1000.0])
+            if isinstance(raw_freqs, list):
+                freqs = [parse_frequency_input(f) for f in raw_freqs]
+            else:
+                freqs = [parse_frequency_input(item) for item in str(raw_freqs).split(",") if item.strip()]
+            for f in freqs:
+                blocks.append({
+                    "start_frequency_hz": f,
+                    "stop_frequency_hz": f,
+                    "count": 1,
+                    "scale": "linear",
+                    "precision": parse_precision_input(self.settings.get("precision", 1.0)),
+                    "amplitude": float(self.settings.get("amplitude", 0.0001)),
+                    "excitation_type": int(self.settings.get("excitation_type", 2)),
+                    "point_delay_ms": float(self.settings.get("point_delay_ms", 20.0)),
+                    "point_delay_us": int(float(self.settings.get("point_delay_ms", 20.0)) * 1000.0),
+                    "phase_sync": int(bool(self.settings.get("phase_sync", False))),
+                })
         else:
             start_f = parse_frequency_input(self.settings.get("start_frequency_hz", 100.0))
             stop_f = parse_frequency_input(self.settings.get("stop_frequency_hz", 10000000.0))
             count = max(1, int(self.settings.get("count", 101)))
+            scale = str(self.settings.get("scale", "logarithmic")).strip().lower()
+            blocks.append({
+                "start_frequency_hz": start_f,
+                "stop_frequency_hz": stop_f,
+                "count": count,
+                "scale": scale,
+                "precision": parse_precision_input(self.settings.get("precision", 1.0)),
+                "amplitude": float(self.settings.get("amplitude", 0.0001)),
+                "excitation_type": int(self.settings.get("excitation_type", 2)),
+                "point_delay_ms": float(self.settings.get("point_delay_ms", 20.0)),
+                "point_delay_us": int(float(self.settings.get("point_delay_ms", 20.0)) * 1000.0),
+                "phase_sync": int(bool(self.settings.get("phase_sync", False))),
+            })
+        return blocks
 
-            if scale == "logarithmic":
-                if start_f <= 0 or stop_f <= 0:
-                    raise ValueError("Frequenzen für logarithmische Skalierung müssen > 0 Hz sein.")
-                frequency_queue_hz = np.logspace(np.log10(start_f), np.log10(stop_f), count).tolist()
-            else:
-                frequency_queue_hz = np.linspace(start_f, stop_f, count).tolist()
+    def generate_measurement_queue(self) -> list[dict]:
+        self.measurement_setup_queue = []
+        self.settings = self.get_settings_from_config()
+        blocks = self.parse_frequency_blocks()
 
         mux_enabled = bool(self.settings.get("mux_enabled", False))
         mux_mode = int(self.settings.get("mux_mode", 4))
@@ -380,40 +422,53 @@ class ConfigBuilder:
 
         self.settings["measurement_mode"] = meas_mode
         self.settings["measurement_channel"] = meas_chan
-        delay_ms = float(self.settings.get("point_delay_ms", 20.0))
-        precision_val = parse_precision_input(self.settings.get("precision", 1.0))
 
-        for index, freq in enumerate(frequency_queue_hz):
-            single_setup = {
-                "id": index + 1,
-                "timestamp_mode": int(self.settings.get("timestamp_mode", 0)),
-                "enable_current_range_output": int(bool(self.settings.get("enable_current_range_output", False))),
-                "measurement_mode": meas_mode,
-                "measurement_channel": meas_chan,
-                "current_range": int(self.settings.get("current_range", 2)),
-                "voltage_range": int(self.settings.get("voltage_range", 1)),
-                "counter_port": int(self.settings.get("counter_port", 0)),
-                "reference_port": int(self.settings.get("reference_port", 0)),
-                "working_sense_port": int(self.settings.get("working_sense_port", 0)),
-                "working_port": int(self.settings.get("working_port", 0)),
-                "mode": mode,
-                "frequency": float(freq),
-                "start_frequency_hz": start_f,
-                "stop_frequency_hz": stop_f,
-                "count": int(self.settings.get("count", 101)),
-                "scale": scale,
-                "precision": precision_val,
-                "amplitude": float(self.settings.get("amplitude", 0.0001)),
-                "excitation_type": int(self.settings.get("excitation_type", 2)),
-                "point_delay_ms": delay_ms,
-                "point_delay_us": int(delay_ms * 1000.0),
-                "phase_sync": int(bool(self.settings.get("phase_sync", False))),
-                "dc_bias_enabled": int(bool(self.settings.get("dc_bias_enabled", False))),
-                "bias_voltage_v": float(self.settings.get("bias_voltage_v", 0.0)),
-                "number_of_spectra": int(self.settings.get("number_of_spectra", 10)),
-                "sync_time_us": int(self.settings.get("sync_time_us", 0)),
-            }
-            self.measurement_setup_queue.append(single_setup)
+        global_id = 1
+        for block in blocks:
+            start_f = block["start_frequency_hz"]
+            stop_f = block["stop_frequency_hz"]
+            count = block["count"]
+            scale = block["scale"]
+
+            if block["scale"] == "logarithmic" and start_f > 0 and stop_f > 0 and count > 1:
+                freqs = np.logspace(np.log10(start_f), np.log10(stop_f), count).tolist()
+            elif count > 1:
+                freqs = np.linspace(start_f, stop_f, count).tolist()
+            else:
+                freqs = [start_f]
+
+            for freq in freqs:
+                single_setup = {
+                    "id": global_id,
+                    "timestamp_mode": int(self.settings.get("timestamp_mode", 0)),
+                    "enable_current_range_output": int(bool(self.settings.get("enable_current_range_output", False))),
+                    "measurement_mode": meas_mode,
+                    "measurement_channel": meas_chan,
+                    "current_range": int(self.settings.get("current_range", 2)),
+                    "voltage_range": int(self.settings.get("voltage_range", 1)),
+                    "counter_port": int(self.settings.get("counter_port", 0)),
+                    "reference_port": int(self.settings.get("reference_port", 0)),
+                    "working_sense_port": int(self.settings.get("working_sense_port", 0)),
+                    "working_port": int(self.settings.get("working_port", 0)),
+                    "mode": str(self.settings.get("mode", "sweep")),
+                    "frequency": float(freq),
+                    "start_frequency_hz": start_f,
+                    "stop_frequency_hz": stop_f,
+                    "count": count,
+                    "scale": scale,
+                    "precision": block["precision"],
+                    "amplitude": block["amplitude"],
+                    "excitation_type": block["excitation_type"],
+                    "point_delay_ms": block["point_delay_ms"],
+                    "point_delay_us": block["point_delay_us"],
+                    "phase_sync": block["phase_sync"],
+                    "dc_bias_enabled": int(bool(self.settings.get("dc_bias_enabled", False))),
+                    "bias_voltage_v": float(self.settings.get("bias_voltage_v", 0.0)),
+                    "number_of_spectra": int(self.settings.get("number_of_spectra", 10)),
+                    "sync_time_us": int(self.settings.get("sync_time_us", 0)),
+                }
+                self.measurement_setup_queue.append(single_setup)
+                global_id += 1
 
         return self.measurement_setup_queue
 

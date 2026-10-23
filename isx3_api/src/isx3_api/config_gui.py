@@ -1,5 +1,5 @@
 """
-config_gui.py - Vollständiges grafisches Konfigurations- und Steuerungsfenster für das ISX-3 (ohne Kompensation).
+config_gui.py - Grafisches Konfigurationsfenster mit Block-Tabelle, Doppelklick-Edit und Einheiten-Hinweis.
 """
 
 import os
@@ -9,11 +9,11 @@ from tkinter import messagebox, ttk
 import serial.tools.list_ports
 
 from .measurement import Measurement
-from .config_handler import parse_precision_input
+from .config_handler import parse_frequency_input, parse_precision_input
 
 
 class ConfigGUI:
-    """Vollständiges Tkinter-Konfigurationsfenster mit allen Hardware-, MUX- und Plot-Parametern."""
+    """Vollständiges Tkinter-Konfigurationsfenster mit Frequenzblock-Tabelle und Doppelklick-Bearbeitung."""
 
     PRECISION_PRESETS = [
         "0 (low - fastest)",
@@ -25,8 +25,8 @@ class ConfigGUI:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("Sciospec ISX-3 - Professioneller Mess-Manager")
-        self.root.geometry("980x820")
-        self.root.minsize(900, 740)
+        self.root.geometry("1020x900")
+        self.root.minsize(940, 800)
 
         self.config_dir = os.path.abspath("config")
         os.makedirs(self.config_dir, exist_ok=True)
@@ -40,7 +40,6 @@ class ConfigGUI:
 
     @staticmethod
     def _write_default_ini(target_path: str) -> None:
-        """Schreibt ein vollständiges INI-Template ohne Kompensation."""
         default_content = """[Connection]
 interface_type = COM
 port = COM12
@@ -81,6 +80,13 @@ amplitude = 0.0001
 point_delay_ms = 20.0
 phase_sync = False
 
+[FrequencyBlocks]
+block_1_start = 100.0
+block_1_stop = 10000000.0
+block_1_steps = 101
+block_1_scale = logarithmic
+block_1_precision = 1.0
+
 [DCBias]
 dc_bias_enabled = False
 bias_voltage_v = 0.0
@@ -98,7 +104,6 @@ number_of_spectra = 3
 [ApiSettings]
 plot_type = bode
 continuous_measurement = False
-use_hardware_sweep = False
 live_plot_enabled = True
 live_plot_mode = point
 """
@@ -137,7 +142,7 @@ live_plot_mode = point
         self._log(f"[INFO] Gefundene COM-Ports: {', '.join(ports)}")
 
     def _build_ui(self) -> None:
-        # --- PROFIL-VERWALTUNG OBEN ---
+        # Profil-Verwaltung oben
         profile_frame = ttk.LabelFrame(self.root, text=" Profil-Verwaltung ", padding=8)
         profile_frame.pack(fill=tk.X, padx=10, pady=5)
 
@@ -157,7 +162,7 @@ live_plot_mode = point
             row=0, column=5, padx=20, sticky=tk.E
         )
 
-        # --- TABS ---
+        # Tabs
         notebook = ttk.Notebook(self.root)
         notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 
@@ -165,13 +170,11 @@ live_plot_mode = point
         tab_signal = ttk.Frame(notebook, padding=10)
         tab_plot = ttk.Frame(notebook, padding=10)
 
-        notebook.add(tab_main, text=" 1. Schnittstelle, Kanal & Frequenz ")
+        notebook.add(tab_main, text=" 1. Schnittstelle, Kanal & Frequenzblöcke ")
         notebook.add(tab_signal, text=" 2. Anregung, Messbereiche & Precision ")
         notebook.add(tab_plot, text=" 3. DC-Bias & Live-Plot ")
 
-        # =====================================================================
-        # TAB 1: SCHNITTSTELLE, ROUTING & FREQUENZ
-        # =====================================================================
+        # TAB 1: SCHNITTSTELLE, ROUTING & FREQUENZBLÖCKE (TABELLE)
         conn_frame = ttk.LabelFrame(tab_main, text=" Verbindung (USB / RS232 / Ethernet) ", padding=8)
         conn_frame.pack(fill=tk.X, pady=5)
 
@@ -228,7 +231,7 @@ live_plot_mode = point
 
         self.frame_main = ttk.Frame(self.dynamic_container)
         ttk.Label(self.frame_main, text="Elektroden-Konfiguration:").grid(row=0, column=0, sticky=tk.W, padx=5)
-        self.main_bnc_mode_var = tk.StringVar(value="2 (4-Leiter Kelvin)")
+        self.main_bnc_mode_var = tk.StringVar(value="2 (4-Leiter Kelvin / 4-Point)")
         ttk.Combobox(
             self.frame_main,
             textvariable=self.main_bnc_mode_var,
@@ -264,44 +267,36 @@ live_plot_mode = point
         self.mux_delay_var = tk.StringVar(value="0.10")
         ttk.Entry(self.frame_mux, textvariable=self.mux_delay_var, width=7).grid(row=0, column=7, padx=5)
 
-        # Frequenz-Setup
-        freq_frame = ttk.LabelFrame(tab_main, text=" Frequenz-Konfiguration (0xB6) ", padding=8)
-        freq_frame.pack(fill=tk.X, pady=5)
+        # Frequenz-Blöcke (Tabelle mit Doppelklick-Bindung)
+        block_frame = ttk.LabelFrame(tab_main, text=" Frequenz-Blöcke (Multi-Block Hardware-Sweep 0xB6 0x03) ", padding=8)
+        block_frame.pack(fill=tk.BOTH, expand=True, pady=5)
 
-        ttk.Label(freq_frame, text="Frequenz-Modus:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=3)
-        self.freq_mode_var = tk.StringVar(value="sweep")
-        freq_mode_combo = ttk.Combobox(freq_frame, textvariable=self.freq_mode_var, values=["sweep", "single"], width=10, state="readonly")
-        freq_mode_combo.grid(row=0, column=1, sticky=tk.W, padx=5, pady=3)
-        freq_mode_combo.bind("<<ComboboxSelected>>", self._on_freq_mode_change)
+        columns = ("min_f", "max_f", "steps", "scale", "precision")
+        self.block_tree = ttk.Treeview(block_frame, columns=columns, show="headings", height=4)
+        self.block_tree.heading("min_f", text="Min f [Hz]")
+        self.block_tree.heading("max_f", text="Max f [Hz]")
+        self.block_tree.heading("steps", text="Steps")
+        self.block_tree.heading("scale", text="Scale")
+        self.block_tree.heading("precision", text="Precision")
 
-        ttk.Label(freq_frame, text="Einzelfrequenz(en) [bei 'single']:").grid(row=0, column=2, sticky=tk.W, padx=15, pady=3)
-        self.single_freqs_var = tk.StringVar(value="1000.0")
-        self.single_freqs_entry = ttk.Entry(freq_frame, textvariable=self.single_freqs_var, width=28)
-        self.single_freqs_entry.grid(row=0, column=3, columnspan=3, sticky=tk.W, padx=5, pady=3)
+        self.block_tree.column("min_f", width=140, anchor=tk.CENTER)
+        self.block_tree.column("max_f", width=140, anchor=tk.CENTER)
+        self.block_tree.column("steps", width=80, anchor=tk.CENTER)
+        self.block_tree.column("scale", width=110, anchor=tk.CENTER)
+        self.block_tree.column("precision", width=110, anchor=tk.CENTER)
+        self.block_tree.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        ttk.Label(freq_frame, text="Startfrequenz:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=3)
-        self.start_val_var = tk.StringVar(value="100")
-        ttk.Entry(freq_frame, textvariable=self.start_val_var, width=10).grid(row=1, column=1, sticky=tk.W, padx=2, pady=3)
-        self.start_unit_var = tk.StringVar(value="Hz")
-        ttk.Combobox(freq_frame, textvariable=self.start_unit_var, values=["Hz", "kHz", "MHz"], width=6, state="readonly").grid(row=1, column=2, sticky=tk.W, padx=2, pady=3)
+        # Doppelklick-Event auf die Tabelle binden
+        self.block_tree.bind("<Double-1>", lambda event: self._edit_frequency_block())
 
-        ttk.Label(freq_frame, text="Stopfrequenz:").grid(row=1, column=3, sticky=tk.W, padx=15, pady=3)
-        self.stop_val_var = tk.StringVar(value="10")
-        ttk.Entry(freq_frame, textvariable=self.stop_val_var, width=10).grid(row=1, column=4, sticky=tk.W, padx=2, pady=3)
-        self.stop_unit_var = tk.StringVar(value="MHz")
-        ttk.Combobox(freq_frame, textvariable=self.stop_unit_var, values=["Hz", "kHz", "MHz"], width=6, state="readonly").grid(row=1, column=5, sticky=tk.W, padx=2, pady=3)
+        btn_subframe = ttk.Frame(block_frame)
+        btn_subframe.pack(side=tk.TOP, fill=tk.X, padx=5, pady=2)
 
-        ttk.Label(freq_frame, text="Punkteanzahl (Count):").grid(row=2, column=0, sticky=tk.W, padx=5, pady=3)
-        self.count_var = tk.StringVar(value="101")
-        ttk.Entry(freq_frame, textvariable=self.count_var, width=10).grid(row=2, column=1, sticky=tk.W, padx=2, pady=3)
+        ttk.Button(btn_subframe, text="➕ Block hinzufügen", command=self._add_frequency_block).pack(side=tk.LEFT, padx=3)
+        ttk.Button(btn_subframe, text="✏️ Ausgewählten Block bearbeiten (oder Doppelklick)", command=self._edit_frequency_block).pack(side=tk.LEFT, padx=3)
+        ttk.Button(btn_subframe, text="🗑️ Block löschen", command=self._delete_frequency_block).pack(side=tk.LEFT, padx=3)
 
-        ttk.Label(freq_frame, text="Skalierung:").grid(row=2, column=3, sticky=tk.W, padx=15, pady=3)
-        self.scale_var = tk.StringVar(value="logarithmic")
-        ttk.Combobox(freq_frame, textvariable=self.scale_var, values=["logarithmic", "linear"], width=12, state="readonly").grid(row=2, column=4, columnspan=2, sticky=tk.W, padx=2, pady=3)
-
-        # =====================================================================
         # TAB 2: ANREGUNG, MESSBEREICHE, PRECISION & TIMING
-        # =====================================================================
         exc_frame = ttk.LabelFrame(tab_signal, text=" Anregung & Analoge Frontend-Messbereiche ", padding=10)
         exc_frame.pack(fill=tk.X, pady=5)
 
@@ -355,7 +350,7 @@ live_plot_mode = point
         prec_frame = ttk.LabelFrame(tab_signal, text=" Integrationszeit (Precision), Timing & Mittelung ", padding=10)
         prec_frame.pack(fill=tk.X, pady=5)
 
-        ttk.Label(prec_frame, text="Precision (0–10 oder Preset):").grid(row=0, column=0, sticky=tk.W, padx=5, pady=4)
+        ttk.Label(prec_frame, text="Standard Precision (0–10 oder Preset):").grid(row=0, column=0, sticky=tk.W, padx=5, pady=4)
         self.precision_var = tk.StringVar(value="1 (medium - default)")
         self.precision_combo = ttk.Combobox(
             prec_frame,
@@ -385,10 +380,8 @@ live_plot_mode = point
             variable=self.phase_sync_var,
         ).grid(row=4, column=0, columnspan=3, sticky=tk.W, padx=5, pady=4)
 
-        # =====================================================================
-        # TAB 3: DC-BIAS, PROTOKOLL-OPTIONEN & LIVE-PLOT (OHNE KOMPENSATION)
-        # =====================================================================
-        opt_frame = ttk.LabelFrame(tab_plot, text=" DC-Bias (nur Main Port) & Datenframe-Optionen (0x97) ", padding=10)
+        # TAB 3: DC-BIAS, PROTOKOLL-OPTIONEN & LIVE-PLOT
+        opt_frame = ttk.LabelFrame(tab_plot, text=" DC-Bias & Datenframe-Optionen (0x97) ", padding=10)
         opt_frame.pack(fill=tk.X, pady=5)
 
         self.dc_bias_var = tk.BooleanVar(value=False)
@@ -415,7 +408,7 @@ live_plot_mode = point
             variable=self.curr_range_out_var,
         ).grid(row=2, column=0, columnspan=3, sticky=tk.W, padx=5, pady=3)
 
-        plot_frame = ttk.LabelFrame(tab_plot, text=" Visualisierung & Ausführungs-Optionen ", padding=10)
+        plot_frame = ttk.LabelFrame(tab_plot, text=" Visualisierung & Live-Plot Optionen ", padding=10)
         plot_frame.pack(fill=tk.X, pady=5)
 
         self.live_plot_enabled_var = tk.BooleanVar(value=True)
@@ -441,15 +434,139 @@ live_plot_mode = point
             state="readonly",
         ).grid(row=1, column=1, columnspan=2, sticky=tk.W, padx=5, pady=3)
 
-        # --- LOG FRAME UNTEN ---
+        # Log Frame unten
         log_frame = ttk.LabelFrame(self.root, text=" Live-Status & Log ", padding=5)
         log_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
-        self.log_text = tk.Text(log_frame, height=6, bg="#1e1e1e", fg="#00ff00", font=("Consolas", 9))
+        self.log_text = tk.Text(log_frame, height=5, bg="#1e1e1e", fg="#00ff00", font=("Consolas", 9))
         self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         self._on_interface_change(None)
         self._on_mode_change(None)
-        self._on_freq_mode_change(None)
+
+    def _add_frequency_block(self) -> None:
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Frequenzblock hinzufügen")
+        dlg.geometry("380x320")
+        dlg.transient(self.root)
+        dlg.grab_set()
+
+        # Hinweis-Label für Einheiten (k, M)
+        lbl_hint = ttk.Label(
+            dlg,
+            text="💡 Tipp: Du kannst Einheiten wie '100k' oder '1M'\ndirekt eingeben (wird automatisch umgerechnet).",
+            foreground="#0055aa",
+            justify=tk.LEFT,
+        )
+        lbl_hint.grid(row=0, column=0, columnspan=2, sticky=tk.W, padx=10, pady=5)
+
+        ttk.Label(dlg, text="Min f [Hz]:").grid(row=1, column=0, sticky=tk.W, padx=10, pady=5)
+        e_min = ttk.Entry(dlg, width=18)
+        e_min.grid(row=1, column=1, padx=10, pady=5)
+        e_min.insert(0, "100")
+
+        ttk.Label(dlg, text="Max f [Hz]:").grid(row=2, column=0, sticky=tk.W, padx=10, pady=5)
+        e_max = ttk.Entry(dlg, width=18)
+        e_max.grid(row=2, column=1, padx=10, pady=5)
+        e_max.insert(0, "1M")
+
+        ttk.Label(dlg, text="Steps (Punkte):").grid(row=3, column=0, sticky=tk.W, padx=10, pady=5)
+        e_steps = ttk.Entry(dlg, width=18)
+        e_steps.grid(row=3, column=1, padx=10, pady=5)
+        e_steps.insert(0, "101")
+
+        ttk.Label(dlg, text="Scale:").grid(row=4, column=0, sticky=tk.W, padx=10, pady=5)
+        cb_scale = ttk.Combobox(dlg, values=["logarithmic", "linear"], width=16, state="readonly")
+        cb_scale.grid(row=4, column=1, padx=10, pady=5)
+        cb_scale.set("logarithmic")
+
+        ttk.Label(dlg, text="Precision:").grid(row=5, column=0, sticky=tk.W, padx=10, pady=5)
+        cb_prec = ttk.Combobox(dlg, values=self.PRECISION_PRESETS, width=16, state="normal")
+        cb_prec.grid(row=5, column=1, padx=10, pady=5)
+        cb_prec.set("1 (medium - default)")
+
+        def on_ok():
+            try:
+                mn = parse_frequency_input(e_min.get().strip())
+                mx = parse_frequency_input(e_max.get().strip())
+                st = int(e_steps.get().strip())
+                sc = cb_scale.get()
+                pr = parse_precision_input(cb_prec.get())
+                self.block_tree.insert("", tk.END, values=(mn, mx, st, sc, pr))
+                dlg.destroy()
+            except Exception as ex:
+                messagebox.showerror("Fehler", f"Ungültige Eingabe: {ex}", parent=dlg)
+
+        ttk.Button(dlg, text="Hinzufügen", command=on_ok).grid(row=6, column=0, columnspan=2, pady=10)
+
+    def _edit_frequency_block(self) -> None:
+        selected = self.block_tree.selection()
+        if not selected:
+            messagebox.showwarning("Kein Block gewählt", "Bitte wähle einen Frequenzblock in der Tabelle aus (oder mache einen Doppelklick darauf).")
+            return
+
+        item_id = selected[0]
+        vals = self.block_tree.item(item_id, "values")
+
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Frequenzblock bearbeiten")
+        dlg.geometry("380x320")
+        dlg.transient(self.root)
+        dlg.grab_set()
+
+        lbl_hint = ttk.Label(
+            dlg,
+            text="💡 Tipp: Du kannst Einheiten wie '100k' oder '1M'\ndirekt eingeben (wird automatisch umgerechnet).",
+            foreground="#0055aa",
+            justify=tk.LEFT,
+        )
+        lbl_hint.grid(row=0, column=0, columnspan=2, sticky=tk.W, padx=10, pady=5)
+
+        ttk.Label(dlg, text="Min f [Hz]:").grid(row=1, column=0, sticky=tk.W, padx=10, pady=5)
+        e_min = ttk.Entry(dlg, width=18)
+        e_min.grid(row=1, column=1, padx=10, pady=5)
+        e_min.insert(0, vals[0])
+
+        ttk.Label(dlg, text="Max f [Hz]:").grid(row=2, column=0, sticky=tk.W, padx=10, pady=5)
+        e_max = ttk.Entry(dlg, width=18)
+        e_max.grid(row=2, column=1, padx=10, pady=5)
+        e_max.insert(0, vals[1])
+
+        ttk.Label(dlg, text="Steps (Punkte):").grid(row=3, column=0, sticky=tk.W, padx=10, pady=5)
+        e_steps = ttk.Entry(dlg, width=18)
+        e_steps.grid(row=3, column=1, padx=10, pady=5)
+        e_steps.insert(0, vals[2])
+
+        ttk.Label(dlg, text="Scale:").grid(row=4, column=0, sticky=tk.W, padx=10, pady=5)
+        cb_scale = ttk.Combobox(dlg, values=["logarithmic", "linear"], width=16, state="readonly")
+        cb_scale.grid(row=4, column=1, padx=10, pady=5)
+        cb_scale.set(vals[3])
+
+        ttk.Label(dlg, text="Precision:").grid(row=5, column=0, sticky=tk.W, padx=10, pady=5)
+        cb_prec = ttk.Combobox(dlg, values=self.PRECISION_PRESETS, width=16, state="normal")
+        cb_prec.grid(row=5, column=1, padx=10, pady=5)
+        cb_prec.set(self._format_precision_for_ui(float(vals[4])))
+
+        def on_ok():
+            try:
+                mn = parse_frequency_input(e_min.get().strip())
+                mx = parse_frequency_input(e_max.get().strip())
+                st = int(e_steps.get().strip())
+                sc = cb_scale.get()
+                pr = parse_precision_input(cb_prec.get())
+                self.block_tree.item(item_id, values=(mn, mx, st, sc, pr))
+                dlg.destroy()
+            except Exception as ex:
+                messagebox.showerror("Fehler", f"Ungültige Eingabe: {ex}", parent=dlg)
+
+        ttk.Button(dlg, text="Speichern", command=on_ok).grid(row=6, column=0, columnspan=2, pady=10)
+
+    def _delete_frequency_block(self) -> None:
+        selected = self.block_tree.selection()
+        if not selected:
+            messagebox.showwarning("Kein Block gewählt", "Bitte wähle einen Frequenzblock in der Tabelle aus.")
+            return
+        for item_id in selected:
+            self.block_tree.delete(item_id)
 
     def _on_interface_change(self, event) -> None:
         if self.interface_var.get() == "TCP":
@@ -466,12 +583,6 @@ live_plot_mode = point
         else:
             self.frame_mux.pack_forget()
             self.frame_main.pack(fill=tk.BOTH, expand=True)
-
-    def _on_freq_mode_change(self, event) -> None:
-        if self.freq_mode_var.get() == "single":
-            self.single_freqs_entry.configure(state="normal")
-        else:
-            self.single_freqs_entry.configure(state="disabled")
 
     def _on_excitation_change(self, event) -> None:
         exc_code = int(self.exc_type_var.get().split()[0])
@@ -550,34 +661,37 @@ live_plot_mode = point
             }
             self.volt_range_var.set(vr_map.get(vr_val, "1 (±1.0V Default)"))
 
-            # FrequencySetup
-            self.freq_mode_var.set(ini.get("FrequencySetup", "mode", fallback="sweep").strip().lower())
-            self.single_freqs_var.set(ini.get("FrequencySetup", "frequency_hz", fallback="1000.0"))
+            # Frequenzblöcke einlesen
+            for row in self.block_tree.get_children():
+                self.block_tree.delete(row)
 
-            start_hz = float(ini.get("FrequencySetup", "start_frequency_hz", fallback="100.0"))
-            if start_hz >= 1e6 and start_hz % 1e6 == 0:
-                self.start_val_var.set(str(int(start_hz / 1e6)))
-                self.start_unit_var.set("MHz")
-            elif start_hz >= 1e3 and start_hz % 1e3 == 0:
-                self.start_val_var.set(str(int(start_hz / 1e3)))
-                self.start_unit_var.set("kHz")
-            else:
-                self.start_val_var.set(str(start_hz))
-                self.start_unit_var.set("Hz")
+            loaded_blocks = False
+            if ini.has_section("FrequencyBlocks"):
+                block_indices = set()
+                for key in ini.options("FrequencyBlocks"):
+                    if key.startswith("block_") and "_start" in key:
+                        try:
+                            idx = int(key.split("_")[1])
+                            block_indices.add(idx)
+                        except ValueError:
+                            pass
+                if block_indices:
+                    for idx in sorted(list(block_indices)):
+                        mn = ini.get("FrequencyBlocks", f"block_{idx}_start", fallback="100.0")
+                        mx = ini.get("FrequencyBlocks", f"block_{idx}_stop", fallback="10000000.0")
+                        st = ini.get("FrequencyBlocks", f"block_{idx}_steps", fallback="101")
+                        sc = ini.get("FrequencyBlocks", f"block_{idx}_scale", fallback="logarithmic")
+                        pr = ini.get("FrequencyBlocks", f"block_{idx}_precision", fallback="1.0")
+                        self.block_tree.insert("", tk.END, values=(mn, mx, st, sc, pr))
+                    loaded_blocks = True
 
-            stop_hz = float(ini.get("FrequencySetup", "stop_frequency_hz", fallback="10000000.0"))
-            if stop_hz >= 1e6 and stop_hz % 1e6 == 0:
-                self.stop_val_var.set(str(int(stop_hz / 1e6)))
-                self.stop_unit_var.set("MHz")
-            elif stop_hz >= 1e3 and stop_hz % 1e3 == 0:
-                self.stop_val_var.set(str(int(stop_hz / 1e3)))
-                self.stop_unit_var.set("kHz")
-            else:
-                self.stop_val_var.set(str(stop_hz))
-                self.stop_unit_var.set("Hz")
-
-            self.count_var.set(ini.get("FrequencySetup", "count", fallback="101"))
-            self.scale_var.set(ini.get("FrequencySetup", "scale", fallback="logarithmic"))
+            if not loaded_blocks:
+                mn = ini.get("FrequencySetup", "start_frequency_hz", fallback="100.0")
+                mx = ini.get("FrequencySetup", "stop_frequency_hz", fallback="10000000.0")
+                st = ini.get("FrequencySetup", "count", fallback="101")
+                sc = ini.get("FrequencySetup", "scale", fallback="logarithmic")
+                pr = ini.get("FrequencySetup", "precision", fallback="1.0")
+                self.block_tree.insert("", tk.END, values=(mn, mx, st, sc, pr))
 
             exc_t = ini.getint("FrequencySetup", "excitation_type", fallback=2)
             self.exc_type_var.set("1 (Voltage / Spannung in V)" if exc_t == 1 else "2 (Current / Strom in A)")
@@ -615,7 +729,6 @@ live_plot_mode = point
 
             self._on_interface_change(None)
             self._on_mode_change(None)
-            self._on_freq_mode_change(None)
             self._log(f"[OK] Profil geladen: {os.path.basename(self.config_path)}")
         except Exception as e:
             messagebox.showerror("Fehler beim Laden", str(e))
@@ -634,19 +747,7 @@ live_plot_mode = point
     def save_current_form(self) -> bool:
         try:
             raw_prec_input = self.precision_var.get().strip()
-            try:
-                first_tok = raw_prec_input.split()[0].replace(",", ".")
-                test_val = float(first_tok)
-                if not (0.0 <= test_val <= 10.0):
-                    messagebox.showwarning(
-                        "Ungültige Precision",
-                        "Der Precision-Wert muss laut Hersteller zwischen 0.0 und 10.0 liegen.",
-                    )
-                    return False
-            except ValueError:
-                pass
             prec_float = parse_precision_input(raw_prec_input)
-            self.precision_var.set(self._format_precision_for_ui(prec_float))
 
             exc_type_int = int(self.exc_type_var.get().split()[0])
             curr_range_int = int(self.curr_range_var.get().split()[0])
@@ -666,12 +767,11 @@ live_plot_mode = point
 
             for sec in [
                 "Connection", "MUX", "Frontend", "ExtensionPort",
-                "FrequencySetup", "DCBias", "SyncTime", "Options", "Measurement", "ApiSettings"
+                "FrequencySetup", "FrequencyBlocks", "DCBias", "SyncTime", "Options", "Measurement", "ApiSettings"
             ]:
                 if not ini.has_section(sec):
                     ini.add_section(sec)
 
-            # Sektion [Compensation] komplett entfernen falls vorhanden
             if ini.has_section("Compensation"):
                 ini.remove_section("Compensation")
 
@@ -705,29 +805,32 @@ live_plot_mode = point
                 if not ini.has_option("ExtensionPort", ep_key):
                     ini.set("ExtensionPort", ep_key, "0")
 
-            # FrequencySetup
-            def unit_to_hz(val_str: str, unit_str: str) -> float:
-                try:
-                    v = float(val_str)
-                except ValueError:
-                    v = 100.0
-                u = unit_str.lower()
-                if "k" in u:
-                    return v * 1e3
-                if "m" in u:
-                    return v * 1e6
-                return v
+            # Frequenzblöcke in INI schreiben
+            for key in list(ini.options("FrequencyBlocks")):
+                if key.startswith("block_"):
+                    ini.remove_option("FrequencyBlocks", key)
 
-            start_hz = unit_to_hz(self.start_val_var.get(), self.start_unit_var.get())
-            stop_hz = unit_to_hz(self.stop_val_var.get(), self.stop_unit_var.get())
+            children = self.block_tree.get_children()
+            if not children:
+                self.block_tree.insert("", tk.END, values=("100.0", "10000000.0", "101", "logarithmic", "1.0"))
+                children = self.block_tree.get_children()
 
-            ini.set("FrequencySetup", "mode", self.freq_mode_var.get())
-            ini.set("FrequencySetup", "frequency_hz", self.single_freqs_var.get().strip())
-            ini.set("FrequencySetup", "start_frequency_hz", str(start_hz))
-            ini.set("FrequencySetup", "stop_frequency_hz", str(stop_hz))
-            ini.set("FrequencySetup", "count", self.count_var.get().strip())
-            ini.set("FrequencySetup", "scale", self.scale_var.get())
-            ini.set("FrequencySetup", "precision", str(prec_float))
+            for idx, item_id in enumerate(children, start=1):
+                vals = self.block_tree.item(item_id, "values")
+                ini.set("FrequencyBlocks", f"block_{idx}_start", str(vals[0]))
+                ini.set("FrequencyBlocks", f"block_{idx}_stop", str(vals[1]))
+                ini.set("FrequencyBlocks", f"block_{idx}_steps", str(vals[2]))
+                ini.set("FrequencyBlocks", f"block_{idx}_scale", str(vals[3]))
+                ini.set("FrequencyBlocks", f"block_{idx}_precision", str(vals[4]))
+
+            # FrequencySetup (Abwärtskompatibilität)
+            first_vals = self.block_tree.item(children[0], "values") if children else ("100.0", "10000000.0", "101", "logarithmic", "1.0")
+            ini.set("FrequencySetup", "mode", "sweep")
+            ini.set("FrequencySetup", "start_frequency_hz", str(first_vals[0]))
+            ini.set("FrequencySetup", "stop_frequency_hz", str(first_vals[1]))
+            ini.set("FrequencySetup", "count", str(first_vals[2]))
+            ini.set("FrequencySetup", "scale", str(first_vals[3]))
+            ini.set("FrequencySetup", "precision", str(first_vals[4]))
             ini.set("FrequencySetup", "excitation_type", str(exc_type_int))
             ini.set("FrequencySetup", "amplitude", self.amp_var.get().strip())
             ini.set("FrequencySetup", "point_delay_ms", self.delay_var.get().strip())
@@ -746,7 +849,8 @@ live_plot_mode = point
             ini.set("Measurement", "number_of_spectra", self.spectra_var.get().strip())
             ini.set("ApiSettings", "plot_type", self.plot_type_var.get())
             ini.set("ApiSettings", "continuous_measurement", "False")
-            ini.set("ApiSettings", "use_hardware_sweep", "False")
+            if ini.has_option("ApiSettings", "use_hardware_sweep"):
+                ini.remove_option("ApiSettings", "use_hardware_sweep")
             ini.set("ApiSettings", "live_plot_enabled", str(self.live_plot_enabled_var.get()))
             plot_mode_val = "point" if "point" in self.live_plot_mode_var.get() else "sweep"
             ini.set("ApiSettings", "live_plot_mode", plot_mode_val)

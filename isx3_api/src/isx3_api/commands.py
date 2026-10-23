@@ -1,8 +1,5 @@
 """
 commands.py - Treiber- und Kommunikationsschicht für das Sciospec ISX-3 Impedanzspektrometer.
-
-Verwaltet die serielle RS232/USB-Verbindung, das Sciospec-Frame-Protokoll,
-die Quittierungslogik (ACK/NACK), die MUX32-Steuerung sowie die Dekodierung binärer Messdaten.
 """
 
 import struct
@@ -44,23 +41,19 @@ class ISX3:
     CMD_MEASURE = 0xB8
 
     def __init__(self):
-        """Initialisiert die Schnittstellenparameter."""
         self.device: serial.Serial | None = None
         self.serial_protocol = None
         self.print_msg = True
         self.active_mux_pins: tuple[int, int, int, int] | None = None
 
     def is_port_available(self, port: str) -> bool:
-        """Prüft, ob der angegebene COM-Port im Betriebssystem existiert."""
         available_ports = [p.device for p in serial.tools.list_ports.comports()]
         return port in available_ports
 
     def list_available_ports(self) -> list[str]:
-        """Gibt eine Liste aller verfügbaren seriellen Ports zurück."""
         return [p.device for p in serial.tools.list_ports.comports()]
 
     def connect_device_fs(self, settings: dict) -> serial.Serial | None:
-        """Öffnet die serielle Verbindung zum ISX-3."""
         port = settings.get("port", "COM12")
         baudrate = int(settings.get("baudrate", 115200))
 
@@ -88,7 +81,6 @@ class ISX3:
             return None
 
     def _send_command(self, cmd_tag: int, data: bytes, timeout: float = 3.0) -> None:
-        """Verpackt Nutzdaten in das Sciospec-Frame-Format und wartet auf ACK."""
         if not self.device or not self.device.is_open:
             raise ConnectionError("Keine aktive serielle Verbindung zum ISX-3 vorhanden.")
 
@@ -106,7 +98,6 @@ class ISX3:
         self._wait_for_ack(cmd_tag, timeout=timeout)
 
     def _wait_for_ack(self, original_cmd_tag: int, timeout: float = 3.0) -> None:
-        """Liest den Bestätigungs-Frame (0x18) und fängt Systemnachrichten ab."""
         start_time = time.time()
         while time.time() - start_time < timeout:
             tag_byte = self.device.read(1)
@@ -142,7 +133,7 @@ class ISX3:
                     continue
                 msg_len = len_b[0]
                 payload = self.device.read(msg_len)
-                self.device.read(1)  # End-Tag konsumieren
+                self.device.read(1)
                 if tag == 0x1D:
                     print(f"[STATUS-INFO] ISX-3 Systemnachricht (0x1D): Payload={payload.hex()}")
                 continue
@@ -150,7 +141,6 @@ class ISX3:
         raise TimeoutError(f"Timeout: Keine Bestätigung (ACK) für Befehl 0x{original_cmd_tag:02X} erhalten.")
 
     def software_reset(self) -> None:
-        """Führt einen Software-Reset des ISX-3 durch (Befehl 0xA1)."""
         if not self.device or not self.device.is_open:
             print("[WARNUNG] Kein Gerät verbunden, Reset übersprungen.")
             return
@@ -164,7 +154,6 @@ class ISX3:
         print("[OK] Software-Reset an ISX-3 gesendet.")
 
     def set_options(self, settings: dict) -> None:
-        """Konfiguriert globale Geräteeinstellungen (Zeitstempel, DC-Bias, Sync-Time)."""
         timestamp_mode = int(settings.get("timestamp_mode", 0))
         enable_current_range_output = bool(settings.get("enable_current_range_output", False))
         dc_bias_enabled = bool(settings.get("dc_bias_enabled", False))
@@ -196,7 +185,6 @@ class ISX3:
         working_sense_port: int,
         working_port: int,
     ) -> None:
-        """Setzt die Extension-Ports (Befehl 0xB2) zur Ansteuerung des MUX32."""
         pins = (
             int(counter_port),
             int(reference_port),
@@ -206,7 +194,6 @@ class ISX3:
         self._send_command(self.CMD_SETUP_EXTENSION, bytes(pins))
 
     def route_mux_sensor(self, sensor_idx: int, wire_mode: int = 4, **kwargs) -> tuple[int, int, int, int]:
-        """Berechnet die MUX32-Pins für einen Sensor und speichert sie."""
         if wire_mode == 4:
             if not 1 <= sensor_idx <= 8:
                 raise ValueError(f"Sensor-Index {sensor_idx} ungültig für 4-Leiter-Modus (erlaubt: 1..8).")
@@ -229,7 +216,6 @@ class ISX3:
         return ce, re, ws, we
 
     def clear_mux_routing(self) -> None:
-        """Deaktiviert das MUX-Routing und leert den Frontend-/MUX-Stack."""
         self.active_mux_pins = None
         if self.device and self.device.is_open:
             self._send_command(self.CMD_SETUP_FRONTEND, bytes([0xFF, 0xFF, 0xFF]))
@@ -246,18 +232,15 @@ class ISX3:
             eops += bytes([0x01]) + struct.pack(">I", int(point_delay_us))
         if phase_sync and frequency_hz >= 100000.0:
             eops += bytes([0x02]) + struct.pack(">I", 1)
-        if excitation_type in (1, 2):
+        if excitation_type != 1:
             eops += bytes([0x03]) + struct.pack(">I", int(excitation_type))
         return eops
 
     def set_frequency_setup(self, current_setup: dict) -> None:
-        """
-        Konfiguriert Frequenzpunkt (0xB6), Frontend (0xB0) und MUX32-Kanal (0xB2)
-        in der exakt aus commands_2.py bewährten Reihenfolge für jeden Messpunkt.
-        """
+        """Klassischer Punkt-für-Punkt-Modus (0xB6 0x02)."""
         measurement_mode = int(current_setup.get("measurement_mode", 2))
         measurement_channel = int(current_setup.get("measurement_channel", 1))
-        current_range = int(current_setup.get("current_range", 1))
+        current_range = int(current_setup.get("current_range", 2))
         voltage_range = int(current_setup.get("voltage_range", 1))
 
         frequency = float(current_setup["frequency"])
@@ -267,36 +250,86 @@ class ISX3:
         point_delay_us = int(current_setup.get("point_delay_us", 0))
         phase_sync = bool(current_setup.get("phase_sync", False))
 
-        # 1. Frequenz-Setup initialisieren (0xB6 0x01)
         self._send_command(self.CMD_SETUP_FREQUENCY, bytes([0x01]))
-
-        # 2. Frontend- und MUX-Channel-Stack leeren (0xB0 FF FF FF)
         self._send_command(self.CMD_SETUP_FRONTEND, bytes([0xFF, 0xFF, 0xFF]))
 
-        # 3. Analoge Frontend-Einstellungen setzen (0xB0)
         fe_payload = struct.pack(">BBBB", measurement_mode, measurement_channel, current_range, voltage_range)
         self._send_command(self.CMD_SETUP_FRONTEND, fe_payload)
 
-        # 4. MUX32-Pins setzen (0xB2), falls MUX aktiv
         if self.active_mux_pins is not None:
             self.set_extension_port(*self.active_mux_pins)
 
-        # 5. Frequenzpunkt inkl. Extended Options (EOP) setzen (0xB6 0x02)
-        eops = b""
-        if point_delay_us > 0:
-            eops += bytes([0x01]) + struct.pack(">I", int(point_delay_us))
-        if phase_sync and frequency >= 100000.0:
-            eops += bytes([0x02]) + struct.pack(">I", 1)
-        if excitation_type != 1:
-            eops += bytes([0x03]) + struct.pack(">I", int(excitation_type))
+        eops = self._build_extended_options(
+            point_delay_us=point_delay_us,
+            phase_sync=phase_sync,
+            excitation_type=excitation_type,
+            frequency_hz=frequency,
+        )
 
         freq_payload = bytes([0x02]) + struct.pack(">fff", frequency, precision, amplitude) + eops
         self._send_command(self.CMD_SETUP_FREQUENCY, freq_payload)
 
+    def configure_hardware_sweep(
+        self,
+        blocks: list[dict],
+        global_settings: dict,
+        switch_delay_s: float = 0.10,
+    ) -> None:
+        """
+        Konfiguriert einen oder mehrere Frequenzblöcke als Hardware-Sweep (Befehl 0xB6 0x03).
+        Entspricht exakt der blockweisen Konfiguration im C-Beispiel und Handbuch (S. 67-68).
+        """
+        measurement_mode = int(global_settings.get("measurement_mode", 2))
+        measurement_channel = int(global_settings.get("measurement_channel", 1))
+        current_range = int(global_settings.get("current_range", 2))
+        voltage_range = int(global_settings.get("voltage_range", 1))
+        switch_delay = float(global_settings.get("switch_delay_s", switch_delay_s))
+
+        # 1. Setup initialisieren (0xB6 0x01)
+        self._send_command(self.CMD_SETUP_FREQUENCY, bytes([0x01]))
+
+        # 2. Alle Frequenzblöcke nacheinander hinzufügen (0xB6 0x03)
+        for block in blocks:
+            start_f = float(block["start_frequency_hz"])
+            stop_f = float(block["stop_frequency_hz"])
+            count = float(block["count"])
+            scale_flag = 1 if str(block["scale"]).strip().lower() == "logarithmic" else 0
+            precision = float(block["precision"])
+            amplitude = float(block["amplitude"])
+            excitation_type = int(block["excitation_type"])
+            point_delay_us = int(block["point_delay_us"])
+            phase_sync = bool(block["phase_sync"])
+
+            eops = self._build_extended_options(
+                point_delay_us=point_delay_us,
+                phase_sync=phase_sync,
+                excitation_type=excitation_type,
+                frequency_hz=stop_f,
+            )
+            sweep_payload = (
+                bytes([0x03])
+                + struct.pack(">fffBff", start_f, stop_f, count, scale_flag, precision, amplitude)
+                + eops
+            )
+            self._send_command(self.CMD_SETUP_FREQUENCY, sweep_payload)
+
+        # 3. Frontend-Stack leeren (0xB0 FF FF FF)
+        self._send_command(self.CMD_SETUP_FRONTEND, bytes([0xFF, 0xFF, 0xFF]))
+
+        # 4. Analoge Frontend-Einstellungen setzen (0xB0)
+        fe_payload = struct.pack(">BBBB", measurement_mode, measurement_channel, current_range, voltage_range)
+        self._send_command(self.CMD_SETUP_FRONTEND, fe_payload)
+
+        # 5. MUX-Relais setzen (0xB2), falls MUX aktiv, und Einschwingzeit abwarten
+        if self.active_mux_pins is not None:
+            self.set_extension_port(*self.active_mux_pins)
+            time.sleep(max(0.08, float(switch_delay)))
+        else:
+            time.sleep(0.02)
+
     def start_measurement(
         self, spectra: int, id: int, measurement_settings: dict, expected_frames: int | None = None
     ) -> dict:
-        """Startet die Messung auf dem ISX-3 und liest 'expected_frames' Messpunkte ein."""
         if not self.device or not self.device.is_open:
             print("[FEHLER] Kein Gerät verbunden.")
             return {
@@ -344,7 +377,6 @@ class ISX3:
     def read_measurement_data(
         self, spectra: int, timeout: float, measurement_settings: dict
     ) -> dict:
-        """Liest eingehende Messframes (0xB8)."""
         results = {
             "id": [], "real": [], "imag": [], "timestamp": [],
             "timestamp_unit": [], "current_range": [], "frequencies": [],

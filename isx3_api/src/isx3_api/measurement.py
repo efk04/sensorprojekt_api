@@ -142,11 +142,13 @@ class Measurement:
         self.measurement_queue = self.config_builder.generate_measurement_queue()
         self.plot_type = self.measurement_settings.get("plot_type", "bode")
 
+        freq_mode = str(self.measurement_settings.get("mode", "sweep")).strip().lower()
+
         mux_enabled = bool(self.measurement_settings.get("mux_enabled", False))
         mux_mode = int(self.measurement_settings.get("mux_mode", 4))
-        mux_chan = int(self.measurement_settings.get("channel", 2))
-        raw_sensors = str(self.measurement_settings.get("active_sensors", "1-8"))
-        switch_delay = float(self.measurement_settings.get("switch_delay_s", 0.10))
+        mux_chan = int(self.measurement_settings.get("mux_channel", 2))
+        raw_sensors = str(self.measurement_settings.get("mux_active_sensors", "1-8"))
+        switch_delay = float(self.measurement_settings.get("mux_switch_delay_s", 0.10))
 
         main_fe_mode = int(self.measurement_settings.get("measurement_mode", 2))
         c_range = int(self.measurement_settings.get("current_range", 2))
@@ -189,43 +191,101 @@ class Measurement:
             for sensor_idx in active_sensors:
                 if mux_enabled:
                     print(f"\n==========================================")
-                    print(f" Starte Sweep für MUX-Sensor #{sensor_idx}")
+                    print(f" Starte Messung ({freq_mode.upper()}) für MUX-Sensor #{sensor_idx}")
                     print(f"==========================================")
                     self.device.route_mux_sensor(sensor_idx=sensor_idx, wire_mode=mux_mode)
                     time.sleep(max(0.05, switch_delay))
                 else:
                     self.device.active_mux_pins = None
-                    print(f"\n--- Starte Messdurchlauf über MAIN PORT ---")
+                    print(f"\n--- Starte Messdurchlauf ({freq_mode.upper()}) über MAIN PORT ---")
 
                 self.current_results = []
 
-                for idx, current_setup in enumerate(self.measurement_queue):
-                    step_results, timestamp = self.start_single_step(
-                        current_setup, self.measurement_settings
+                if freq_mode == "sweep" and len(self.measurement_queue) > 1:
+                    blocks = self.config_builder.parse_frequency_blocks()
+                    total_count = len(self.measurement_queue)
+                    number_of_spectra = int(self.measurement_queue[0]["number_of_spectra"])
+
+                    # Hardware Sweep Block programmieren (0xB6 0x03 für alle Blöcke)
+                    self.device.configure_hardware_sweep(
+                        blocks=blocks,
+                        global_settings=self.measurement_settings,
+                        switch_delay_s=switch_delay,
                     )
 
-                    if not step_results.get("id"):
-                        continue
+                    total_expected_frames = total_count * number_of_spectra
+                    timestamp = time.time()
 
-                    self.save_measurement(
-                        results_data=step_results,
-                        timestamp=timestamp,
-                        current_setup=current_setup,
-                        icm=1,
-                        sensor_idx=sensor_idx if mux_enabled else 0,
+                    raw_sweep_data = self.device.start_measurement(
+                        spectra=number_of_spectra,
+                        id=1,
+                        measurement_settings=self.measurement_settings,
+                        expected_frames=total_expected_frames,
                     )
 
-                    self.current_results.append(step_results)
+                    for pt_idx, step_setup in enumerate(self.measurement_queue):
+                        indices = [spec_i * total_count + pt_idx for spec_i in range(number_of_spectra)]
+                        valid_indices = [i for i in indices if i < len(raw_sweep_data.get("id", []))]
+                        if not valid_indices:
+                            continue
 
-                    if live_plot_enabled:
-                        is_last_point = (idx == len(self.measurement_queue) - 1)
-                        if live_plot_mode == "point" or is_last_point:
-                            self.update_live_plot(
-                                results=step_results,
-                                current_setup=current_setup,
-                                current_results=self.current_results,
-                                len_queue=len(self.measurement_queue),
-                            )
+                        freq_val = float(step_setup["frequency"])
+                        point_results = {
+                            "id": [raw_sweep_data["id"][i] for i in valid_indices],
+                            "real": [raw_sweep_data["real"][i] for i in valid_indices],
+                            "imag": [raw_sweep_data["imag"][i] for i in valid_indices],
+                            "timestamp": [raw_sweep_data["timestamp"][i] for i in valid_indices],
+                            "timestamp_unit": [raw_sweep_data["timestamp_unit"][i] for i in valid_indices],
+                            "current_range": [raw_sweep_data["current_range"][i] for i in valid_indices],
+                            "frequencies": [freq_val] * len(valid_indices),
+                        }
+
+                        self.save_measurement(
+                            results_data=point_results,
+                            timestamp=timestamp,
+                            current_setup=step_setup,
+                            icm=1,
+                            sensor_idx=sensor_idx if mux_enabled else 0,
+                        )
+                        self.current_results.append(point_results)
+
+                        if live_plot_enabled:
+                            is_last_point = (pt_idx == len(self.measurement_queue) - 1)
+                            if live_plot_mode == "point" or is_last_point:
+                                self.update_live_plot(
+                                    results=point_results,
+                                    current_setup=step_setup,
+                                    current_results=self.current_results,
+                                    len_queue=len(self.measurement_queue),
+                                )
+                else:
+                    for idx, current_setup in enumerate(self.measurement_queue):
+                        step_results, timestamp = self.start_single_step(
+                            current_setup, self.measurement_settings
+                        )
+
+                        if not step_results.get("id"):
+                            continue
+
+                        self.save_measurement(
+                            results_data=step_results,
+                            timestamp=timestamp,
+                            current_setup=current_setup,
+                            icm=1,
+                            sensor_idx=sensor_idx if mux_enabled else 0,
+                        )
+
+                        self.current_results.append(step_results)
+
+                        if live_plot_enabled:
+                            is_last_point = (idx == len(self.measurement_queue) - 1)
+                            if live_plot_mode == "point" or is_last_point:
+                                self.update_live_plot(
+                                    results=step_results,
+                                    current_setup=current_setup,
+                                    current_results=self.current_results,
+                                    len_queue=len(self.measurement_queue),
+                                )
 
             print(f"\n[OK] Alle Messungen erfolgreich abgeschlossen. Datei: {h5_full_path}")
 

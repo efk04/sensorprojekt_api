@@ -1,6 +1,5 @@
 """
-auswertung_test.py - Universeller Validierungsvergleich zwischen Sciospec-GUI und Python-API.
-Optimiert für MUX32-Messungen mit getrennten Fenstern für Betrag (|Z|) und Phase (φ).
+auswertung_test.py - Korrigierte Version für exakten MUX-Sensor-Abgleich.
 """
 
 import io
@@ -26,7 +25,7 @@ def select_sources() -> tuple[str | None, str | None]:
 
     init_scio = DEFAULT_SCIO_DIR if os.path.exists(DEFAULT_SCIO_DIR) else None
     scio_dir = filedialog.askdirectory(
-        title="1/2: Wähle den Sciospec-Ordner (z.B. 'mux' oder 'MAIN PORT')",
+        title="1/2: Wähle den Sciospec-Ordner (z.B. 'mux')",
         initialdir=init_scio,
     )
     if not scio_dir:
@@ -76,102 +75,57 @@ def load_single_spec(spec_path: str) -> pd.DataFrame:
     return clean_df.sort_values(by="frequency").reset_index(drop=True)
 
 
-def parse_sciospec_folder(base_dir: str) -> dict[int, dict[str, np.ndarray]]:
+def parse_sciospec_folder(base_dir: str) -> tuple[dict[int, dict[str, np.ndarray]], dict[int, float]]:
     pin_regex = re.compile(r"(\d+)\s+(\d+)\s+(\d+)\s+(\d+)")
+    results = {}
+    durations_ms = {}
 
-    def find_mux_folders(target_dir: str):
-        found = []
-        try:
-            for entry in os.scandir(target_dir):
-                if entry.is_dir() and pin_regex.search(entry.name):
-                    found.append(entry)
-        except Exception:
-            pass
-        return found
+    # Durchsuche alle Unterordner im Sciospec-Verzeichnis nach MUX-Pins
+    for root, dirs, _ in os.walk(base_dir):
+        for d in dirs:
+            match = pin_regex.search(d)
+            if match:
+                we_pin = int(match.group(4))
+                sensor_idx = we_pin // 4
+                folder_path = os.path.join(root, d)
 
-    mux_entries = find_mux_folders(base_dir)
+                spec_files = [
+                    os.path.join(folder_path, f)
+                    for f in os.listdir(folder_path)
+                    if f.lower().endswith(".spec")
+                ]
 
-    if not mux_entries:
-        for root, dirs, _ in os.walk(base_dir):
-            for d in dirs:
-                if pin_regex.search(d):
-                    full_path = os.path.join(root, d)
-                    if full_path not in [e.path for e in mux_entries]:
-                        class DummyEntry:
-                            def __init__(self, name, path):
-                                self.name = name
-                                self.path = path
-                        mux_entries.append(DummyEntry(d, full_path))
+                if not spec_files:
+                    continue
 
-    if not mux_entries:
-        spec_files_root = []
-        for root, _, files in os.walk(base_dir):
-            for f in files:
-                if f.lower().endswith(".spec"):
-                    spec_files_root.append(os.path.join(root, f))
+                dfs = [load_single_spec(sf) for sf in spec_files]
+                ref_freq = dfs[0]["frequency"].to_numpy()
 
-        if spec_files_root:
-            dfs = [load_single_spec(sf) for sf in spec_files_root]
-            ref_freq = dfs[0]["frequency"].to_numpy()
-            all_re = np.array([df["real"].to_numpy() for df in dfs])
-            all_im = np.array([df["imag"].to_numpy() for df in dfs])
-            mean_re = np.mean(all_re, axis=0)
-            mean_im = np.mean(all_im, axis=0)
+                all_re = np.array([df["real"].to_numpy() for df in dfs])
+                all_im = np.array([df["imag"].to_numpy() for df in dfs])
 
-            return {
-                0: {
+                mean_re = np.mean(all_re, axis=0)
+                mean_im = np.mean(all_im, axis=0)
+
+                mtimes = [os.path.getmtime(sf) for sf in spec_files]
+                dur_ms = (max(mtimes) - min(mtimes)) * 1000.0 if len(mtimes) > 1 else 250.0
+
+                results[sensor_idx] = {
                     "frequency": ref_freq,
                     "real": mean_re,
                     "imag": mean_im,
                     "z_mag": np.hypot(mean_re, mean_im),
                     "phase": np.degrees(np.arctan2(mean_im, mean_re)),
-                    "count": len(spec_files_root),
+                    "count": len(spec_files),
                 }
-            }
-        else:
-            return {}
+                durations_ms[sensor_idx] = dur_ms
 
+    return results, durations_ms
+
+
+def parse_hdf5_file(h5_file: str) -> tuple[dict[int, dict[str, np.ndarray]], dict[int, float]]:
     results = {}
-    for entry in mux_entries:
-        match = pin_regex.search(entry.name)
-        if not match:
-            continue
-
-        we_pin = int(match.group(4))
-        sensor_idx = we_pin // 4
-
-        spec_files = [
-            os.path.join(entry.path, f)
-            for f in os.listdir(entry.path)
-            if f.lower().endswith(".spec")
-        ]
-
-        if not spec_files:
-            continue
-
-        dfs = [load_single_spec(sf) for sf in spec_files]
-        ref_freq = dfs[0]["frequency"].to_numpy()
-
-        all_re = np.array([df["real"].to_numpy() for df in dfs])
-        all_im = np.array([df["imag"].to_numpy() for df in dfs])
-
-        mean_re = np.mean(all_re, axis=0)
-        mean_im = np.mean(all_im, axis=0)
-
-        results[sensor_idx] = {
-            "frequency": ref_freq,
-            "real": mean_re,
-            "imag": mean_im,
-            "z_mag": np.hypot(mean_re, mean_im),
-            "phase": np.degrees(np.arctan2(mean_im, mean_re)),
-            "count": len(spec_files),
-        }
-
-    return results
-
-
-def parse_hdf5_file(h5_file: str) -> dict[int, dict[str, np.ndarray]]:
-    results = {}
+    durations_ms = {}
     with h5py.File(h5_file, "r") as h5:
         scale_factor = 1.0
         if "Configuration" in h5 and "applied_scale_factor" in h5["Configuration"].attrs:
@@ -180,56 +134,60 @@ def parse_hdf5_file(h5_file: str) -> dict[int, dict[str, np.ndarray]]:
             scale_factor = FALLBACK_SCALE_FOR_OLD_H5
 
         sensor_groups = [k for k in h5.keys() if k.startswith("Sensor_")]
-        if not sensor_groups:
-            sensor_keys = [(0, h5)]
-        else:
-            sensor_keys = [
-                (int(k.split("_")[1]), h5[k])
-                for k in sensor_groups
-                if k.split("_")[1].isdigit()
-            ]
+        
+        for k in sensor_groups:
+            parts = k.split("_")
+            if len(parts) > 1 and parts[1].isdigit():
+                s_idx = int(parts[1])
+                grp = h5[k]
 
-        for s_idx, grp in sensor_keys:
-            meas_keys = sorted(
-                [k for k in grp.keys() if k.startswith("Measurement_")],
-                key=lambda x: [int(n) for n in x.split("_")[1].split(".")],
-            )
-            if not meas_keys:
-                continue
+                if "measurement_duration_ms" in grp.attrs:
+                    durations_ms[s_idx] = float(grp.attrs["measurement_duration_ms"])
+                else:
+                    durations_ms[s_idx] = 350.0
 
-            f_list, re_list, im_list = [], [], []
-            for m_key in meas_keys:
-                f_val = float(np.mean(grp[m_key]["frequency"][()]))
-                re_val = float(np.mean(grp[m_key]["real_part"][()]))
-                im_val = float(np.mean(grp[m_key]["imaginary_part"][()]))
+                meas_keys = sorted(
+                    [mk for mk in grp.keys() if mk.startswith("Measurement_")],
+                    key=lambda x: [int(n) for n in x.split("_")[1].split(".")],
+                )
+                if not meas_keys:
+                    continue
 
-                f_list.append(f_val)
-                re_list.append(re_val)
-                im_list.append(im_val)
+                f_list, re_list, im_list = [], [], []
+                for m_key in meas_keys:
+                    ds = grp[m_key]
+                    f_val = float(np.mean(ds["frequency"][()]))
+                    re_val = float(np.mean(ds["real_part"][()]))
+                    im_val = float(np.mean(ds["imaginary_part"][()]))
 
-            f_arr = np.array(f_list)
-            re_arr = np.array(re_list) * scale_factor
-            im_arr = np.array(im_list) * scale_factor
+                    f_list.append(f_val)
+                    re_list.append(re_val)
+                    im_list.append(im_val)
 
-            results[s_idx] = {
-                "frequency": f_arr,
-                "real": re_arr,
-                "imag": im_arr,
-                "z_mag": np.hypot(re_arr, im_arr),
-                "phase": np.degrees(np.arctan2(im_arr, re_arr)),
-            }
+                f_arr = np.array(f_list)
+                re_arr = np.array(re_list) * scale_factor
+                im_arr = np.array(im_list) * scale_factor
 
-    return results
+                results[s_idx] = {
+                    "frequency": f_arr,
+                    "real": re_arr,
+                    "imag": im_arr,
+                    "z_mag": np.hypot(re_arr, im_arr),
+                    "phase": np.degrees(np.arctan2(im_arr, re_arr)),
+                }
+
+    return results, durations_ms
 
 
-def analyze_and_print_errors(gui_data: dict, py_data: dict, common_sensors: list[int]) -> None:
+def analyze_and_print_errors(gui_data: dict, py_data: dict, common_sensors: list[int], durations_ms: dict) -> None:
     print("\n" + "=" * 90)
-    print(" STATISTISCHE VALIDIERUNGSANALYSE (Stabiler Bereich: 10 kHz - 1 MHz)")
+    print(" STATISTISCHE VALIDIERUNGSANALYSE & MESSZEITEN")
     print("=" * 90)
 
     for s_idx in common_sensors:
         g = gui_data[s_idx]
         p = py_data[s_idx]
+        dur = durations_ms.get(s_idx, 0.0)
 
         common_f = g["frequency"]
         z_gui_interp = g["z_mag"]
@@ -248,89 +206,154 @@ def analyze_and_print_errors(gui_data: dict, py_data: dict, common_sensors: list
         max_err_z = float(np.max(rel_err_z))
         mean_diff_phi = float(np.mean(diff_phi))
 
-        print(f"Sensor / Kanal #{s_idx}:")
+        print(f"Sensor / Kanal #{s_idx} [Messzeit: {dur:.1f} ms]:")
         print(f"  • Mittlere Betragsabweichung (|Z|): {mean_err_z:6.3f} % (Max: {max_err_z:6.3f} %)")
         print(f"  • Mittlere Phasendifferenz (phi):     {mean_diff_phi:6.3f}°")
     print("=" * 90 + "\n")
 
 
 def main():
+    print("\n--- Auswerte-Skript gestartet ---")
+    print("Wähle Deinen Plot-Typ:")
+    print("  [1] Bode-Diagramm (Betrag & Phase) [Standard]")
+    print("  [2] Nyquist-Diagramm (Z_imag vs Z_real)")
+    print("  [3] Impedanz & Imaginärteil über Frequenz")
+    
+    choice = input("Deine Wahl (1-3, Enter für Standard): ").strip()
+    plot_type_map = {"1": "bode", "2": "nyquist", "3": "impedance_frequency"}
+    plot_type = plot_type_map.get(choice, "bode")
+    print(f"[INFO] Gewählter Plot-Typ: {plot_type.upper()}\n")
+
     scio_dir, h5_path = select_sources()
     if not scio_dir or not h5_path:
         print("[INFO] Auswahl abgebrochen.")
         return
 
-    gui_data = parse_sciospec_folder(scio_dir)
-    py_data = parse_hdf5_file(h5_path)
-
-    if len(gui_data) == 1 and len(py_data) == 1:
-        g_key = list(gui_data.keys())[0]
-        p_key = list(py_data.keys())[0]
-        if g_key != p_key:
-            py_data[g_key] = py_data.pop(p_key)
+    gui_data, scio_durations = parse_sciospec_folder(scio_dir)
+    py_data, py_durations = parse_hdf5_file(h5_path)
 
     common_sensors = sorted(set(gui_data.keys()).intersection(py_data.keys()))
 
     if not common_sensors:
-        print(f"[FEHLER] Keine übereinstimmenden Sensoren gefunden. (GUI-Keys: {list(gui_data.keys())}, Py-Keys: {list(py_data.keys())})")
+        print(f"[FEHLER] Keine übereinstimmenden Sensor-IDs gefunden. (GUI: {list(gui_data.keys())}, H5: {list(py_data.keys())})")
         return
 
-    analyze_and_print_errors(gui_data, py_data, common_sensors)
+    analyze_and_print_errors(gui_data, py_data, common_sensors, py_durations)
 
-    # Aufteilung in Blöcke von maximal 8 Sensoren
     chunk_size = 8
     sensor_chunks = [common_sensors[i:i + chunk_size] for i in range(0, len(common_sensors), chunk_size)]
-
     colormap = plt.get_cmap("tab10")
 
     for chunk_idx, chunk in enumerate(sensor_chunks):
-        # Fenster 1: Impedanzbetrag (|Z|)
-        fig_z, axes_z = plt.subplots(4, 2, figsize=(14, 11), sharex=True)
-        axes_z = axes_z.flatten()
+        if plot_type == "nyquist":
+            fig, axes = plt.subplots(4, 2, figsize=(12, 12))
+            axes = axes.flatten()
 
-        # Fenster 2: Phase (φ)
-        fig_phi, axes_phi = plt.subplots(4, 2, figsize=(14, 11), sharex=True)
-        axes_phi = axes_phi.flatten()
+            for idx, s_idx in enumerate(chunk):
+                if idx >= len(axes):
+                    break
+                
+                color = colormap(idx % 10)
+                g = gui_data[s_idx]
+                p = py_data[s_idx]
+                dur = py_durations.get(s_idx, 0.0)
 
-        for idx, s_idx in enumerate(chunk):
-            if idx >= len(axes_z):
-                break
-            
-            color = colormap(idx % 10)
-            g = gui_data[s_idx]
-            p = py_data[s_idx]
+                ax = axes[idx]
+                ax.plot(g["real"], -g["imag"], "-", color=color, linewidth=1.5, label="Nyquist (GUI)")
+                ax.plot(p["real"], -p["imag"], "--", color="black", linewidth=1.0, label="Nyquist (API)")
+                
+                ax.set_xlabel(r"Realteil $Z_{\mathrm{real}}$ / $\Omega$")
+                ax.set_ylabel(r"$-Z_{\mathrm{imag}}$ / $\Omega$")
+                ax.set_title(f"Kanal #{s_idx} (Messzeit: {dur:.1f} ms)", fontsize=9, pad=2)
+                ax.axhline(0, color="black", linewidth=0.8, linestyle=":")
+                ax.axvline(0, color="black", linewidth=0.8, linestyle=":")
+                ax.set_aspect("equal", adjustable="datalim")
+                ax.grid(True, which="both", linestyle="--", alpha=0.4)
+                ax.legend(loc="upper right", fontsize=6)
 
-            # --- Plot in Fenster 1: Betrag |Z| ---
-            ax_z = axes_z[idx]
-            ax_z.plot(g["frequency"], g["z_mag"], "-", color=color, linewidth=1.8, label=f"|Z| (GUI)")
-            ax_z.plot(p["frequency"], p["z_mag"], "--", color="black", linewidth=1.0, label=f"|Z| (API)")
-            ax_z.set_xscale("log")
-            ax_z.set_yscale("log")
-            ax_z.set_ylabel(r"$|Z|$ / $\Omega$")
-            ax_z.set_title(f"Kanal #{s_idx}", fontsize=9, pad=2)
-            ax_z.grid(True, which="both", linestyle="--", alpha=0.4)
-            ax_z.legend(loc="upper right", fontsize=6)
+            for j in range(len(chunk), len(axes)):
+                fig.delaxes(axes[j])
 
-            # --- Plot in Fenster 2: Phase ---
-            ax_p = axes_phi[idx]
-            ax_p.plot(g["frequency"], g["phase"], "-", color=color, linewidth=1.8, label=f"Phase (GUI)")
-            ax_p.plot(p["frequency"], p["phase"], "--", color="black", linewidth=1.0, label=f"Phase (API)")
-            ax_p.set_xscale("log")
-            ax_p.set_ylabel(r"Phase / °")
-            ax_p.set_title(f"Kanal #{s_idx}", fontsize=9, pad=2)
-            ax_p.grid(True, which="both", linestyle="--", alpha=0.4)
-            ax_p.legend(loc="upper right", fontsize=6)
+            fig.suptitle(f"Nyquist-Diagramm (Teil {chunk_idx + 1} von {len(sensor_chunks)})", fontsize=11)
+            fig.tight_layout()
 
-        # Nicht genutzte Subplots bei unvollständigen Chunks ausblenden
-        for j in range(len(chunk), len(axes_z)):
-            fig_z.delaxes(axes_z[j])
-            fig_phi.delaxes(axes_phi[j])
+        elif plot_type == "impedance_frequency":
+            fig, axes = plt.subplots(4, 2, figsize=(14, 11), sharex=True)
+            axes = axes.flatten()
 
-        fig_z.suptitle(f"MUX-Validierung: Impedanzbetrag |Z| (Teil {chunk_idx + 1} von {len(sensor_chunks)})", fontsize=11)
-        fig_z.tight_layout()
+            for idx, s_idx in enumerate(chunk):
+                if idx >= len(axes):
+                    break
+                
+                color = colormap(idx % 10)
+                g = gui_data[s_idx]
+                p = py_data[s_idx]
+                dur = py_durations.get(s_idx, 0.0)
 
-        fig_phi.suptitle(f"MUX-Validierung: Phase φ (Teil {chunk_idx + 1} von {len(sensor_chunks)})", fontsize=11)
-        fig_phi.tight_layout()
+                ax = axes[idx]
+                ax.plot(g["frequency"], g["real"], "-", color=color, linewidth=1.5, label="Z_real (GUI)")
+                ax.plot(p["frequency"], p["real"], "--", color="black", linewidth=1.0, label="Z_real (API)")
+                ax.plot(g["frequency"], np.abs(g["imag"]), ":", color=color, linewidth=1.5, label="|Z_imag| (GUI)")
+                
+                ax.set_xscale("log")
+                ax.set_yscale("log")
+                ax.set_ylabel(r"$Z$ / $\Omega$")
+                ax.set_title(f"Kanal #{s_idx} (Messzeit: {dur:.1f} ms)", fontsize=9, pad=2)
+                ax.grid(True, which="both", linestyle="--", alpha=0.4)
+                ax.legend(loc="upper right", fontsize=6)
+
+            for j in range(len(chunk), len(axes)):
+                fig.delaxes(axes[j])
+
+            fig.suptitle(f"Real- und Imaginärteil (Teil {chunk_idx + 1} von {len(sensor_chunks)})", fontsize=11)
+            fig.tight_layout()
+
+        else:
+            fig_z, axes_z = plt.subplots(4, 2, figsize=(14, 11), sharex=True)
+            axes_z = axes_z.flatten()
+
+            fig_phi, axes_phi = plt.subplots(4, 2, figsize=(14, 11), sharex=True)
+            axes_phi = axes_phi.flatten()
+
+            for idx, s_idx in enumerate(chunk):
+                if idx >= len(axes_z):
+                    break
+                
+                color = colormap(idx % 10)
+                g = gui_data[s_idx]
+                p = py_data[s_idx]
+                dur = py_durations.get(s_idx, 0.0)
+
+                # Betrag |Z|
+                ax_z = axes_z[idx]
+                ax_z.plot(g["frequency"], g["z_mag"], "-", color=color, linewidth=1.8, label="|Z| (GUI)")
+                ax_z.plot(p["frequency"], p["z_mag"], "--", color="black", linewidth=1.0, label="|Z| (API)")
+                ax_z.set_xscale("log")
+                ax_z.set_yscale("log")
+                ax_z.set_ylabel(r"$|Z|$ / $\Omega$")
+                ax_z.set_title(f"Kanal #{s_idx} (Messzeit: {dur:.1f} ms)", fontsize=9, pad=2)
+                ax_z.grid(True, which="both", linestyle="--", alpha=0.4)
+                ax_z.legend(loc="upper right", fontsize=6)
+
+                # Phase
+                ax_p = axes_phi[idx]
+                ax_p.plot(g["frequency"], g["phase"], "-", color=color, linewidth=1.8, label="Phase (GUI)")
+                ax_p.plot(p["frequency"], p["phase"], "--", color="black", linewidth=1.0, label="Phase (API)")
+                ax_p.set_xscale("log")
+                ax_p.set_ylabel(r"Phase / °")
+                ax_p.set_title(f"Kanal #{s_idx} (Messzeit: {dur:.1f} ms)", fontsize=9, pad=2)
+                ax_p.grid(True, which="both", linestyle="--", alpha=0.4)
+                ax_p.legend(loc="upper right", fontsize=6)
+
+            for j in range(len(chunk), len(axes_z)):
+                fig_z.delaxes(axes_z[j])
+                fig_phi.delaxes(axes_phi[j])
+
+            fig_z.suptitle(f"Impedanzbetrag |Z| (Teil {chunk_idx + 1} von {len(sensor_chunks)})", fontsize=11)
+            fig_z.tight_layout()
+
+            fig_phi.suptitle(f"Phase φ (Teil {chunk_idx + 1} von {len(sensor_chunks)})", fontsize=11)
+            fig_phi.tight_layout()
 
     plt.show()
 
