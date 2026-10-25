@@ -158,10 +158,25 @@ class Measurement:
         live_plot_mode = str(self.measurement_settings.get("live_plot_mode", "point")).strip().lower()
 
         active_sensors = []
+        custom_sensor_pins_map = {}
+
         if mux_enabled:
             for part in raw_sensors.split(","):
                 part = part.strip()
-                if "-" in part:
+                if not part:
+                    continue
+                if ":" in part or "=" in part:
+                    sep = ":" if ":" in part else "="
+                    s_id_str, pins_str = part.split(sep, 1)
+                    s_id = int(s_id_str.strip())
+                    pins = [int(p.strip()) for p in pins_str.split(",") if p.strip().isdigit()]
+                    if len(pins) == 4:
+                        custom_sensor_pins_map[s_id] = tuple(pins)
+                        active_sensors.append(s_id)
+                    elif len(pins) == 2:
+                        custom_sensor_pins_map[s_id] = (pins[0], pins[0], pins[1], pins[1])
+                        active_sensors.append(s_id)
+                elif "-" in part:
                     start_s, end_s = part.split("-")
                     active_sensors.extend(range(int(start_s), int(end_s) + 1))
                 elif part.isdigit():
@@ -189,11 +204,15 @@ class Measurement:
 
         try:
             for sensor_idx in active_sensors:
+                # Echten Timer für die API-Messdauer des Sensors starten
+                t_start = time.time()
+
                 if mux_enabled:
                     print(f"\n==========================================")
                     print(f" Starte Messung ({freq_mode.upper()}) für MUX-Sensor #{sensor_idx}")
                     print(f"==========================================")
-                    self.device.route_mux_sensor(sensor_idx=sensor_idx, wire_mode=mux_mode)
+                    c_pins = custom_sensor_pins_map.get(sensor_idx)
+                    self.device.route_mux_sensor(sensor_idx=sensor_idx, wire_mode=mux_mode, custom_pins=c_pins)
                     time.sleep(max(0.05, switch_delay))
                 else:
                     self.device.active_mux_pins = None
@@ -206,7 +225,6 @@ class Measurement:
                     total_count = len(self.measurement_queue)
                     number_of_spectra = int(self.measurement_queue[0]["number_of_spectra"])
 
-                    # Hardware Sweep Block programmieren (0xB6 0x03 für alle Blöcke)
                     self.device.configure_hardware_sweep(
                         blocks=blocks,
                         global_settings=self.measurement_settings,
@@ -286,6 +304,19 @@ class Measurement:
                                     current_results=self.current_results,
                                     len_queue=len(self.measurement_queue),
                                 )
+
+                # Echte Messdauer in Millisekunden berechnen
+                t_end = time.time()
+                duration_ms = (t_end - t_start) * 1000.0
+
+                # Messdauer als Attribut in die HDF5-Datei schreiben
+                full_path = os.path.join("measurements", self.filename)
+                with h5py.File(full_path, "a") as h5_file:
+                    group_key = f"Sensor_{sensor_idx}" if mux_enabled else "Measurement"
+                    if group_key in h5_file:
+                        h5_file[group_key].attrs["measurement_duration_ms"] = duration_ms
+
+                print(f"[INFO] Sensor #{sensor_idx} abgeschlossen. Reale API-Messzeit: {duration_ms:.2f} ms")
 
             print(f"\n[OK] Alle Messungen erfolgreich abgeschlossen. Datei: {h5_full_path}")
 

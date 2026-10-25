@@ -193,17 +193,23 @@ class ISX3:
         )
         self._send_command(self.CMD_SETUP_EXTENSION, bytes(pins))
 
-    def route_mux_sensor(self, sensor_idx: int, wire_mode: int = 4, **kwargs) -> tuple[int, int, int, int]:
-        if wire_mode == 4:
-            if not 1 <= sensor_idx <= 8:
-                raise ValueError(f"Sensor-Index {sensor_idx} ungültig für 4-Leiter-Modus (erlaubt: 1..8).")
+    def route_mux_sensor(
+        self,
+        sensor_idx: int,
+        wire_mode: int = 4,
+        custom_pins: tuple[int, int, int, int] | None = None,
+        **kwargs,
+    ) -> tuple[int, int, int, int]:
+        if custom_pins is not None:
+            ce, re, ws, we = custom_pins
+        elif wire_mode == 4:
+            if not 1 <= sensor_idx <= 32:
+                raise ValueError(f"Sensor-Index {sensor_idx} ungültig.")
             ce = 4 * sensor_idx - 3
             re = 4 * sensor_idx - 2
             ws = 4 * sensor_idx - 1
             we = 4 * sensor_idx
         elif wire_mode == 2:
-            if not 1 <= sensor_idx <= 16:
-                raise ValueError(f"Sensor-Index {sensor_idx} ungültig für 2-Leiter-Modus (erlaubt: 1..16).")
             ce = 2 * sensor_idx - 1
             re = ce
             we = 2 * sensor_idx
@@ -275,20 +281,14 @@ class ISX3:
         global_settings: dict,
         switch_delay_s: float = 0.10,
     ) -> None:
-        """
-        Konfiguriert einen oder mehrere Frequenzblöcke als Hardware-Sweep (Befehl 0xB6 0x03).
-        Entspricht exakt der blockweisen Konfiguration im C-Beispiel und Handbuch (S. 67-68).
-        """
         measurement_mode = int(global_settings.get("measurement_mode", 2))
         measurement_channel = int(global_settings.get("measurement_channel", 1))
         current_range = int(global_settings.get("current_range", 2))
         voltage_range = int(global_settings.get("voltage_range", 1))
         switch_delay = float(global_settings.get("switch_delay_s", switch_delay_s))
 
-        # 1. Setup initialisieren (0xB6 0x01)
         self._send_command(self.CMD_SETUP_FREQUENCY, bytes([0x01]))
 
-        # 2. Alle Frequenzblöcke nacheinander hinzufügen (0xB6 0x03)
         for block in blocks:
             start_f = float(block["start_frequency_hz"])
             stop_f = float(block["stop_frequency_hz"])
@@ -313,14 +313,11 @@ class ISX3:
             )
             self._send_command(self.CMD_SETUP_FREQUENCY, sweep_payload)
 
-        # 3. Frontend-Stack leeren (0xB0 FF FF FF)
         self._send_command(self.CMD_SETUP_FRONTEND, bytes([0xFF, 0xFF, 0xFF]))
 
-        # 4. Analoge Frontend-Einstellungen setzen (0xB0)
         fe_payload = struct.pack(">BBBB", measurement_mode, measurement_channel, current_range, voltage_range)
         self._send_command(self.CMD_SETUP_FRONTEND, fe_payload)
 
-        # 5. MUX-Relais setzen (0xB2), falls MUX aktiv, und Einschwingzeit abwarten
         if self.active_mux_pins is not None:
             self.set_extension_port(*self.active_mux_pins)
             time.sleep(max(0.08, float(switch_delay)))

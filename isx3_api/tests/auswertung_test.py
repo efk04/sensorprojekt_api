@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 
 
-DEFAULT_SCIO_DIR = r"C:\Users\lukas\Documents\Test_Scio\setup\mux"
+DEFAULT_SCIO_DIR = r"C:\Users\lukas\Documents\Test_Scio"
 DEFAULT_H5_DIR = r"C:\Users\lukas\Documents\GitHub\sensorprojekt_api\isx3_api\measurements"
 
 FALLBACK_SCALE_FOR_OLD_H5 = 1.0
@@ -141,11 +141,6 @@ def parse_hdf5_file(h5_file: str) -> tuple[dict[int, dict[str, np.ndarray]], dic
                 s_idx = int(parts[1])
                 grp = h5[k]
 
-                if "measurement_duration_ms" in grp.attrs:
-                    durations_ms[s_idx] = float(grp.attrs["measurement_duration_ms"])
-                else:
-                    durations_ms[s_idx] = 350.0
-
                 meas_keys = sorted(
                     [mk for mk in grp.keys() if mk.startswith("Measurement_")],
                     key=lambda x: [int(n) for n in x.split("_")[1].split(".")],
@@ -154,6 +149,8 @@ def parse_hdf5_file(h5_file: str) -> tuple[dict[int, dict[str, np.ndarray]], dic
                     continue
 
                 f_list, re_list, im_list = [], [], []
+                timestamps = []
+
                 for m_key in meas_keys:
                     ds = grp[m_key]
                     f_val = float(np.mean(ds["frequency"][()]))
@@ -163,6 +160,19 @@ def parse_hdf5_file(h5_file: str) -> tuple[dict[int, dict[str, np.ndarray]], dic
                     f_list.append(f_val)
                     re_list.append(re_val)
                     im_list.append(im_val)
+
+                    # Echten Timestamp aus der HDF5-Messung auslesen (falls vorhanden)[cite: 209]
+                    if "timestamp" in ds:
+                        ts = ds["timestamp"][()]
+                        timestamps.append(float(ts))
+
+                # Dynamische Ermittlung der Messzeit in Millisekunden[cite: 208, 209]
+                if "measurement_duration_ms" in grp.attrs:
+                    durations_ms[s_idx] = float(grp.attrs["measurement_duration_ms"])
+                elif len(timestamps) > 1:
+                    durations_ms[s_idx] = (max(timestamps) - min(timestamps)) * 1000.0
+                else:
+                    durations_ms[s_idx] = 350.0
 
                 f_arr = np.array(f_list)
                 re_arr = np.array(re_list) * scale_factor

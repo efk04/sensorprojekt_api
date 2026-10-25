@@ -113,6 +113,20 @@ live_plot_mode = point
     def _show_info(self, title: str, text: str) -> None:
         messagebox.showinfo(title, text)
 
+    def _show_pin_help(self) -> None:
+        help_text = (
+            "Hilfe zur Pin-Belegung (MUX32):\n\n"
+            "Du kannst die Sensoren auf zwei Arten definieren:\n"
+            "1. Standard-Bereiche (z.B. '1-8'):\n"
+            "   Nutzt die automatische 4-Leiter-Berechnung (CE, RE, WS, WE).\n\n"
+            "2. Individuelle Pin-Belegung (z.B. '1: 4,8,9,12'):\n"
+            "   Weist einem Sensor explizit 4 Pins zu.\n"
+            "   Reihenfolge der Pins: Counter (CE), Reference (RE), Working Sense (WS), Work (WE).\n\n"
+            "Mehrere Sensoren können mit Kommas getrennt werden:\n"
+            "Beispiel: '1: 4,8,9,12, 2: 5,6,7,10'"
+        )
+        messagebox.showinfo("MUX Pin-Belegung - Hilfe", help_text, parent=self.root)
+
     def _log(self, msg: str) -> None:
         if hasattr(self, "log_text"):
             self.log_text.insert(tk.END, msg + "\n")
@@ -142,7 +156,6 @@ live_plot_mode = point
         self._log(f"[INFO] Gefundene COM-Ports: {', '.join(ports)}")
 
     def _build_ui(self) -> None:
-        # Profil-Verwaltung oben
         profile_frame = ttk.LabelFrame(self.root, text=" Profil-Verwaltung ", padding=8)
         profile_frame.pack(fill=tk.X, padx=10, pady=5)
 
@@ -162,7 +175,6 @@ live_plot_mode = point
             row=0, column=5, padx=20, sticky=tk.E
         )
 
-        # Tabs
         notebook = ttk.Notebook(self.root)
         notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 
@@ -171,10 +183,9 @@ live_plot_mode = point
         tab_plot = ttk.Frame(notebook, padding=10)
 
         notebook.add(tab_main, text=" 1. Schnittstelle, Kanal & Frequenzblöcke ")
-        notebook.add(tab_signal, text=" 2. Anregung, Messbereiche & Precision ")
+        notebook.add(tab_signal, text=" 2. Anregung, Messbereiche & Timing ")
         notebook.add(tab_plot, text=" 3. DC-Bias & Live-Plot ")
 
-        # TAB 1: SCHNITTSTELLE, ROUTING & FREQUENZBLÖCKE (TABELLE)
         conn_frame = ttk.LabelFrame(tab_main, text=" Verbindung (USB / RS232 / Ethernet) ", padding=8)
         conn_frame.pack(fill=tk.X, pady=5)
 
@@ -210,7 +221,6 @@ live_plot_mode = point
         self.watchdog_var = tk.StringVar(value="60")
         ttk.Entry(self.tcp_subframe, textvariable=self.watchdog_var, width=6).grid(row=0, column=5, padx=3)
 
-        # Betriebsart & Hardware-Routing
         mode_frame = ttk.LabelFrame(tab_main, text=" Betriebsart & Hardware-Routing (0xB0 / 0xB2) ", padding=8)
         mode_frame.pack(fill=tk.X, pady=5)
 
@@ -245,15 +255,18 @@ live_plot_mode = point
         ).grid(row=0, column=1, padx=5)
 
         self.frame_mux = ttk.Frame(self.dynamic_container)
-        ttk.Label(self.frame_mux, text="Aktive Sensoren:").grid(row=0, column=0, sticky=tk.W, padx=5)
+        ttk.Label(self.frame_mux, text="Aktive Sensoren / Pins:").grid(row=0, column=0, sticky=tk.W, padx=5)
         self.mux_sensors_var = tk.StringVar(value="1-8")
-        ttk.Entry(self.frame_mux, textvariable=self.mux_sensors_var, width=10).grid(row=0, column=1, padx=5)
+        ttk.Entry(self.frame_mux, textvariable=self.mux_sensors_var, width=15).grid(row=0, column=1, padx=5)
+        
+        # Interaktiver Info-Button für die Pin-Belegung
+        ttk.Button(self.frame_mux, text="❓ Hilfe zu Pins", command=self._show_pin_help).grid(row=0, column=2, padx=5)
 
-        ttk.Label(self.frame_mux, text="Leiter-Modus:").grid(row=0, column=2, sticky=tk.W, padx=8)
+        ttk.Label(self.frame_mux, text="Leiter-Modus:").grid(row=0, column=3, sticky=tk.W, padx=8)
         self.mux_mode_var = tk.StringVar(value="4")
-        ttk.Combobox(self.frame_mux, textvariable=self.mux_mode_var, values=["2", "4"], width=5, state="readonly").grid(row=0, column=3, padx=5)
+        ttk.Combobox(self.frame_mux, textvariable=self.mux_mode_var, values=["2", "4"], width=5, state="readonly").grid(row=0, column=4, padx=5)
 
-        ttk.Label(self.frame_mux, text="MUX-Port (0xB0):").grid(row=0, column=4, sticky=tk.W, padx=8)
+        ttk.Label(self.frame_mux, text="MUX-Port (0xB0):").grid(row=0, column=5, sticky=tk.W, padx=8)
         self.mux_chan_var = tk.StringVar(value="2 (ExtPort)")
         ttk.Combobox(
             self.frame_mux,
@@ -261,14 +274,13 @@ live_plot_mode = point
             values=["2 (ExtPort)", "3 (InternalMux / EXT2)"],
             width=20,
             state="readonly",
-        ).grid(row=0, column=5, padx=5)
+        ).grid(row=0, column=6, padx=5)
 
-        ttk.Label(self.frame_mux, text="Switch Delay (s):").grid(row=0, column=6, sticky=tk.W, padx=8)
+        ttk.Label(self.frame_mux, text="Switch Delay (s):").grid(row=0, column=7, sticky=tk.W, padx=8)
         self.mux_delay_var = tk.StringVar(value="0.10")
-        ttk.Entry(self.frame_mux, textvariable=self.mux_delay_var, width=7).grid(row=0, column=7, padx=5)
+        ttk.Entry(self.frame_mux, textvariable=self.mux_delay_var, width=7).grid(row=0, column=8, padx=5)
 
-        # Frequenz-Blöcke (Tabelle mit Doppelklick-Bindung)
-        block_frame = ttk.LabelFrame(tab_main, text=" Frequenz-Blöcke (Multi-Block Hardware-Sweep 0xB6 0x03) ", padding=8)
+        block_frame = ttk.LabelFrame(tab_main, text=" Frequenz-Blöcke & Precision (Multi-Block Hardware-Sweep 0xB6 0x03) ", padding=8)
         block_frame.pack(fill=tk.BOTH, expand=True, pady=5)
 
         columns = ("min_f", "max_f", "steps", "scale", "precision")
@@ -286,7 +298,6 @@ live_plot_mode = point
         self.block_tree.column("precision", width=110, anchor=tk.CENTER)
         self.block_tree.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        # Doppelklick-Event auf die Tabelle binden
         self.block_tree.bind("<Double-1>", lambda event: self._edit_frequency_block())
 
         btn_subframe = ttk.Frame(block_frame)
@@ -296,7 +307,7 @@ live_plot_mode = point
         ttk.Button(btn_subframe, text="✏️ Ausgewählten Block bearbeiten (oder Doppelklick)", command=self._edit_frequency_block).pack(side=tk.LEFT, padx=3)
         ttk.Button(btn_subframe, text="🗑️ Block löschen", command=self._delete_frequency_block).pack(side=tk.LEFT, padx=3)
 
-        # TAB 2: ANREGUNG, MESSBEREICHE, PRECISION & TIMING
+        # TAB 2: ANREGUNG, MESSBEREICHE & TIMING
         exc_frame = ttk.LabelFrame(tab_signal, text=" Anregung & Analoge Frontend-Messbereiche ", padding=10)
         exc_frame.pack(fill=tk.X, pady=5)
 
@@ -347,38 +358,27 @@ live_plot_mode = point
             state="readonly",
         ).grid(row=3, column=1, sticky=tk.W, padx=5, pady=4)
 
-        prec_frame = ttk.LabelFrame(tab_signal, text=" Integrationszeit (Precision), Timing & Mittelung ", padding=10)
+        prec_frame = ttk.LabelFrame(tab_signal, text=" Timing, Spektrale Wiederholungen & Mittelung ", padding=10)
         prec_frame.pack(fill=tk.X, pady=5)
 
-        ttk.Label(prec_frame, text="Standard Precision (0–10 oder Preset):").grid(row=0, column=0, sticky=tk.W, padx=5, pady=4)
-        self.precision_var = tk.StringVar(value="1 (medium - default)")
-        self.precision_combo = ttk.Combobox(
-            prec_frame,
-            textvariable=self.precision_var,
-            values=self.PRECISION_PRESETS,
-            width=26,
-            state="normal",
-        )
-        self.precision_combo.grid(row=0, column=1, sticky=tk.W, padx=5, pady=4)
-
-        ttk.Label(prec_frame, text="Anzahl Spectra (Wiederholungen):").grid(row=1, column=0, sticky=tk.W, padx=5, pady=4)
+        ttk.Label(prec_frame, text="Anzahl Spectra (Wiederholungen):").grid(row=0, column=0, sticky=tk.W, padx=5, pady=4)
         self.spectra_var = tk.StringVar(value="3")
-        ttk.Entry(prec_frame, textvariable=self.spectra_var, width=28).grid(row=1, column=1, sticky=tk.W, padx=5, pady=4)
+        ttk.Entry(prec_frame, textvariable=self.spectra_var, width=28).grid(row=0, column=1, sticky=tk.W, padx=5, pady=4)
 
-        ttk.Label(prec_frame, text="Point Delay (ms):").grid(row=2, column=0, sticky=tk.W, padx=5, pady=4)
+        ttk.Label(prec_frame, text="Point Delay (ms):").grid(row=1, column=0, sticky=tk.W, padx=5, pady=4)
         self.delay_var = tk.StringVar(value="20.0")
-        ttk.Entry(prec_frame, textvariable=self.delay_var, width=28).grid(row=2, column=1, sticky=tk.W, padx=5, pady=4)
+        ttk.Entry(prec_frame, textvariable=self.delay_var, width=28).grid(row=1, column=1, sticky=tk.W, padx=5, pady=4)
 
-        ttk.Label(prec_frame, text="Sync-Time zwischen Sweeps (µs):").grid(row=3, column=0, sticky=tk.W, padx=5, pady=4)
+        ttk.Label(prec_frame, text="Sync-Time zwischen Sweeps (µs):").grid(row=2, column=0, sticky=tk.W, padx=5, pady=4)
         self.sync_time_var = tk.StringVar(value="0")
-        ttk.Entry(prec_frame, textvariable=self.sync_time_var, width=28).grid(row=3, column=1, sticky=tk.W, padx=5, pady=4)
+        ttk.Entry(prec_frame, textvariable=self.sync_time_var, width=28).grid(row=2, column=1, sticky=tk.W, padx=5, pady=4)
 
         self.phase_sync_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(
             prec_frame,
             text="Phase Synchronization aktivieren (nur für f >= 100 kHz bei resonanten Sensoren)",
             variable=self.phase_sync_var,
-        ).grid(row=4, column=0, columnspan=3, sticky=tk.W, padx=5, pady=4)
+        ).grid(row=3, column=0, columnspan=3, sticky=tk.W, padx=5, pady=4)
 
         # TAB 3: DC-BIAS, PROTOKOLL-OPTIONEN & LIVE-PLOT
         opt_frame = ttk.LabelFrame(tab_plot, text=" DC-Bias & Datenframe-Optionen (0x97) ", padding=10)
@@ -434,7 +434,6 @@ live_plot_mode = point
             state="readonly",
         ).grid(row=1, column=1, columnspan=2, sticky=tk.W, padx=5, pady=3)
 
-        # Log Frame unten
         log_frame = ttk.LabelFrame(self.root, text=" Live-Status & Log ", padding=5)
         log_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
         self.log_text = tk.Text(log_frame, height=5, bg="#1e1e1e", fg="#00ff00", font=("Consolas", 9))
@@ -450,7 +449,6 @@ live_plot_mode = point
         dlg.transient(self.root)
         dlg.grab_set()
 
-        # Hinweis-Label für Einheiten (k, M)
         lbl_hint = ttk.Label(
             dlg,
             text="💡 Tipp: Du kannst Einheiten wie '100k' oder '1M'\ndirekt eingeben (wird automatisch umgerechnet).",
@@ -617,7 +615,6 @@ live_plot_mode = point
             ini = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
             ini.read(self.config_path, encoding="utf-8")
 
-            # Connection
             self.interface_var.set(ini.get("Connection", "interface_type", fallback="COM"))
             self.port_var.set(ini.get("Connection", "port", fallback="COM12"))
             self.baud_var.set(str(ini.getint("Connection", "baudrate", fallback=115200)))
@@ -625,7 +622,6 @@ live_plot_mode = point
             self.tcp_port_var.set(str(ini.getint("Connection", "tcp_port", fallback=5000)))
             self.watchdog_var.set(str(ini.getint("Connection", "tcp_watchdog_interval_s", fallback=60)))
 
-            # MUX & Main Mode
             mux_enabled = ini.getboolean("MUX", "enabled", fallback=False)
             self.mode_selector_var.set("MUX32 Multiplexer (Zusatzkarte)" if mux_enabled else "Main Port (Front-BNC)")
             self.mux_sensors_var.set(ini.get("MUX", "active_sensors", fallback="1-8"))
@@ -634,7 +630,6 @@ live_plot_mode = point
             self.mux_chan_var.set("3 (InternalMux / EXT2)" if m_chan == 3 else "2 (ExtPort)")
             self.mux_delay_var.set(str(ini.getfloat("MUX", "switch_delay_s", fallback=0.10)))
 
-            # Frontend
             fe_mode = ini.getint("Frontend", "measurement_mode", fallback=2)
             fe_mode_map = {
                 1: "1 (2-Leiter / 2-Point)",
@@ -661,7 +656,6 @@ live_plot_mode = point
             }
             self.volt_range_var.set(vr_map.get(vr_val, "1 (±1.0V Default)"))
 
-            # Frequenzblöcke einlesen
             for row in self.block_tree.get_children():
                 self.block_tree.delete(row)
 
@@ -699,11 +693,6 @@ live_plot_mode = point
             self.delay_var.set(ini.get("FrequencySetup", "point_delay_ms", fallback="20.0"))
             self.phase_sync_var.set(ini.getboolean("FrequencySetup", "phase_sync", fallback=False))
 
-            raw_prec = ini.get("FrequencySetup", "precision", fallback="1.0")
-            prec_val = parse_precision_input(raw_prec)
-            self.precision_var.set(self._format_precision_for_ui(prec_val))
-
-            # DCBias & SyncTime & Options
             self.dc_bias_var.set(ini.getboolean("DCBias", "dc_bias_enabled", fallback=False))
             self.bias_volt_var.set(ini.get("DCBias", "bias_voltage_v", fallback="0.0"))
             self.sync_time_var.set(str(ini.getint("SyncTime", "sync_time_us", fallback=0)))
@@ -717,7 +706,6 @@ live_plot_mode = point
             self.ts_mode_var.set(ts_map.get(ts_m, "0 (Aus)"))
             self.curr_range_out_var.set(ini.getboolean("Options", "enable_current_range_output", fallback=False))
 
-            # Measurement & ApiSettings
             self.spectra_var.set(ini.get("Measurement", "number_of_spectra", fallback="3"))
             self.plot_type_var.set(ini.get("ApiSettings", "plot_type", fallback="bode"))
             self.live_plot_enabled_var.set(ini.getboolean("ApiSettings", "live_plot_enabled", fallback=True))
@@ -746,9 +734,6 @@ live_plot_mode = point
 
     def save_current_form(self) -> bool:
         try:
-            raw_prec_input = self.precision_var.get().strip()
-            prec_float = parse_precision_input(raw_prec_input)
-
             exc_type_int = int(self.exc_type_var.get().split()[0])
             curr_range_int = int(self.curr_range_var.get().split()[0])
             if exc_type_int == 2 and curr_range_int == 0:
@@ -775,7 +760,6 @@ live_plot_mode = point
             if ini.has_section("Compensation"):
                 ini.remove_section("Compensation")
 
-            # Connection
             ini.set("Connection", "interface_type", self.interface_var.get())
             ini.set("Connection", "port", self.port_var.get().strip())
             ini.set("Connection", "baudrate", self.baud_var.get().strip())
@@ -783,7 +767,6 @@ live_plot_mode = point
             ini.set("Connection", "tcp_port", self.tcp_port_var.get().strip())
             ini.set("Connection", "tcp_watchdog_interval_s", self.watchdog_var.get().strip())
 
-            # MUX
             is_mux = "MUX32" in self.mode_selector_var.get()
             mux_ch_str = self.mux_chan_var.get().split()[0]
             ini.set("MUX", "enabled", str(is_mux))
@@ -792,7 +775,6 @@ live_plot_mode = point
             ini.set("MUX", "active_sensors", self.mux_sensors_var.get().strip())
             ini.set("MUX", "switch_delay_s", self.mux_delay_var.get().strip())
 
-            # Frontend
             fe_mode_str = self.main_bnc_mode_var.get().split()[0]
             vr_str = self.volt_range_var.get().split()[0]
             ini.set("Frontend", "measurement_mode", fe_mode_str)
@@ -800,12 +782,10 @@ live_plot_mode = point
             ini.set("Frontend", "current_range", str(curr_range_int))
             ini.set("Frontend", "voltage_range", vr_str)
 
-            # ExtensionPort
             for ep_key in ["counter_port", "reference_port", "working_sense_port", "working_port"]:
                 if not ini.has_option("ExtensionPort", ep_key):
                     ini.set("ExtensionPort", ep_key, "0")
 
-            # Frequenzblöcke in INI schreiben
             for key in list(ini.options("FrequencyBlocks")):
                 if key.startswith("block_"):
                     ini.remove_option("FrequencyBlocks", key)
@@ -823,7 +803,6 @@ live_plot_mode = point
                 ini.set("FrequencyBlocks", f"block_{idx}_scale", str(vals[3]))
                 ini.set("FrequencyBlocks", f"block_{idx}_precision", str(vals[4]))
 
-            # FrequencySetup (Abwärtskompatibilität)
             first_vals = self.block_tree.item(children[0], "values") if children else ("100.0", "10000000.0", "101", "logarithmic", "1.0")
             ini.set("FrequencySetup", "mode", "sweep")
             ini.set("FrequencySetup", "start_frequency_hz", str(first_vals[0]))
@@ -836,7 +815,6 @@ live_plot_mode = point
             ini.set("FrequencySetup", "point_delay_ms", self.delay_var.get().strip())
             ini.set("FrequencySetup", "phase_sync", str(self.phase_sync_var.get()))
 
-            # DCBias, SyncTime & Options
             ini.set("DCBias", "dc_bias_enabled", str(self.dc_bias_var.get()))
             ini.set("DCBias", "bias_voltage_v", self.bias_volt_var.get().strip())
             ini.set("SyncTime", "sync_time_us", self.sync_time_var.get().strip())
@@ -845,7 +823,6 @@ live_plot_mode = point
             ini.set("Options", "timestamp_mode", ts_str)
             ini.set("Options", "enable_current_range_output", str(self.curr_range_out_var.get()))
 
-            # Measurement & ApiSettings
             ini.set("Measurement", "number_of_spectra", self.spectra_var.get().strip())
             ini.set("ApiSettings", "plot_type", self.plot_type_var.get())
             ini.set("ApiSettings", "continuous_measurement", "False")
