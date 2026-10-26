@@ -317,22 +317,20 @@ class ConfigBuilder:
         return self.settings
 
     def parse_frequency_blocks(self) -> list[dict]:
-        """Liest mehrere Frequenzblöcke aus der INI (Unterstützung für Block 1, Block 2 etc.)."""
+        """Liest mehrere Frequenzblöcke inklusive block-spezifischer Anregung aus der INI."""
         self.settings = self.get_settings_from_config()
         ini = self.parser.parser
         blocks = []
 
-        # Prüfen, ob block-spezifische Keys existieren (z.B. block_1_start_hz)
         block_indices = []
-        for sec in ini.sections():
-            if sec.lower() == "frequencyblocks":
-                for key in ini.options(sec):
-                    if key.startswith("block_") and "_start" in key:
-                        try:
-                            idx = int(key.split("_")[1])
-                            block_indices.append(idx)
-                        except ValueError:
-                            pass
+        if ini.has_section("FrequencyBlocks"):
+            for key in ini.options("FrequencyBlocks"):
+                if key.startswith("block_") and "_start" in key:
+                    try:
+                        idx = int(key.split("_")[1])
+                        block_indices.append(idx)
+                    except ValueError:
+                        pass
 
         if block_indices:
             block_indices = sorted(list(set(block_indices)))
@@ -350,14 +348,20 @@ class ConfigBuilder:
                 scale = ini.get(sec, f"block_{idx}_scale", fallback="logarithmic").strip().lower()
                 prec = parse_precision_input(ini.get(sec, f"block_{idx}_precision", fallback=str(global_prec)))
 
+                block_exc_str = ini.get(sec, f"block_{idx}_exc_type", fallback=str(global_exc))
+                exc_type = 1 if ("1" in block_exc_str or "Voltage" in block_exc_str) else 2
+
+                block_amp = ini.get(sec, f"block_{idx}_amplitude", fallback=str(global_amp))
+                amplitude = float(block_amp)
+
                 blocks.append({
                     "start_frequency_hz": start_f,
                     "stop_frequency_hz": stop_f,
                     "count": count,
                     "scale": scale,
                     "precision": prec,
-                    "amplitude": global_amp,
-                    "excitation_type": global_exc,
+                    "amplitude": amplitude,
+                    "excitation_type": exc_type,
                     "point_delay_ms": delay_ms,
                     "point_delay_us": int(delay_ms * 1000.0),
                     "phase_sync": phase_sync,
