@@ -11,6 +11,7 @@ import struct
 import time
 import serial
 import serial.tools.list_ports
+from typing import Any, Dict, Tuple, Optional
 
 # Definition der ISX-3 Antwort- und Statuscodes
 MSG_DICT = {
@@ -251,32 +252,29 @@ class ISX3:
         sensor_idx: int,
         wire_mode: int = 4,
         custom_pins: tuple[int, int, int, int] | None = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> tuple[int, int, int, int]:
-        """Berechnet Pin-Kombinationen fuer Multiplexer-Messungen und speichert diese zwischen."""
+        """Berechnet Pin-Kanalzuordnungen für MUX32/64 und schaltet das Routing um."""
         if custom_pins is not None:
+            # Wenn per Doppelpunkt (z.B. '1: 2,5,8,6') Custom-Pins übergeben wurden
             ce, re, ws, we = custom_pins
-        elif "medical" in self.device_version:
-            if not 1 <= sensor_idx <= 64:
-                raise ValueError(f"Sensor-Index {sensor_idx} ungueltig.")
-            ce = re = ws = we = sensor_idx
         elif wire_mode == 4:
-            if not 1 <= sensor_idx <= 32:
-                raise ValueError(f"Sensor-Index {sensor_idx} ungueltig.")
+            # Automatische 4-Leiter-Berechnung (4 Pins pro Sensor, unabhängig ob Standard oder Medical)
             ce = 4 * sensor_idx - 3
             re = 4 * sensor_idx - 2
             ws = 4 * sensor_idx - 1
             we = 4 * sensor_idx
         elif wire_mode == 2:
+            # Automatische 2-Leiter-Berechnung (2 Pins pro Sensor)
             ce = 2 * sensor_idx - 1
             re = ce
             we = 2 * sensor_idx
             ws = we
         else:
-            raise ValueError(f"Ungueltiger wire_mode: {wire_mode}. Erlaubt sind nur 2 oder 4.")
+            raise ValueError(f"Ungültiger wire_mode: {wire_mode}. Nur 2 oder 4 erlaubt.")
 
         self.active_mux_pins = (ce, re, ws, we)
-        print(f"[MUX32] Sensor #{sensor_idx} ({wire_mode}-Leiter) ausgewaehlt -> CE:{ce}, RE:{re}, WS:{ws}, WE:{we}")
+        print(f"[MUX] Sensor #{sensor_idx} ({wire_mode}-Leiter) aktiviert -> CE:{ce}, RE:{re}, WS:{ws}, WE:{we}")
         return ce, re, ws, we
 
     def clear_mux_routing(self) -> None:

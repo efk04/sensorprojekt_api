@@ -213,6 +213,7 @@ class Measurement:
 
         if mux_enabled:
             if ":" in raw_sensors or "=" in raw_sensors:
+                # Hier werden Custom-Pins mit Doppelpunkt (z.B. '1: 2,2,3,3') geparst
                 pattern = re.compile(r"(\d+)\s*[:=]\s*(\d+(?:\s*,\s*\d+){1,3})")
                 for match in pattern.finditer(raw_sensors):
                     s_id = int(match.group(1).strip())
@@ -224,6 +225,7 @@ class Measurement:
                         custom_sensor_pins_map[s_id] = (pins[0], pins[0], pins[1], pins[1])
                         active_sensors.append(s_id)
             else:
+                # Hier werden normale Bereiche wie '1-2' oder '1,3' geparst
                 for part in raw_sensors.replace(";", ",").split(","):
                     part = part.strip()
                     if not part:
