@@ -1,5 +1,8 @@
 """
-config_gui.py - Grafisches Konfigurationsfenster mit Block-Tabelle, Doppelklick-Edit und Einheiten-Hinweis.
+config_gui.py - Grafisches Konfigurationsfenster fuer das Sciospec ISX-3.
+
+Bietet dynamische Einheitenumschaltung (Standard: Peak A/V vs. Medical: Peak-to-Peak App/Vpp),
+Frequenzblock-Tabellen, MUX-Pin-Hilfe sowie den synchronen System-Baseline-Drift-Check.
 """
 
 import os
@@ -8,12 +11,17 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 import serial.tools.list_ports
 
+from .commands import ISX3
 from .measurement import Measurement
-from .config_handler import parse_frequency_input, parse_precision_input
+from .config_handler import (
+    parse_frequency_input,
+    parse_precision_input,
+    parse_value_with_prefix,
+)
 
 
 class ConfigGUI:
-    """Vollständiges Tkinter-Konfigurationsfenster mit Frequenzblock-Tabelle und Doppelklick-Bearbeitung."""
+    """Tkinter-Hauptfenster fuer Konfiguration, Hardware-Diagnose und Messsteuerung."""
 
     PRECISION_PRESETS = [
         "0 (low - fastest)",
@@ -22,11 +30,51 @@ class ConfigGUI:
         "3 (very high - slowest)",
     ]
 
+    DEVICE_VERSIONS = [
+        "standard (ISX-3 / ISX-3mini)",
+        "medical (Medical Research ISX-3)",
+    ]
+
+    EXC_VALUES_STANDARD = [
+        "1 (Voltage / Spannung in V Peak)",
+        "2 (Current / Strom in A Peak)",
+    ]
+    EXC_VALUES_MEDICAL = [
+        "1 (Voltage / Spannung in Vpp)",
+        "2 (Current / Strom in App)",
+    ]
+
+    # Laut Handbuch Kap. 8.5.5 (0xB0) sind fuer Voltage Range nur 1 und 2 zulaessig
+    VR_VALUES_STANDARD = [
+        "1 (±1.0 V Peak Default)",
+        "2 (±0.09 V / ±90 mV Peak High Gain)",
+    ]
+    VR_VALUES_MEDICAL = [
+        "1 (±2.0 Vpp / ±1.0 Vp Default)",
+        "2 (±180 mVpp / ±90 mVp High Gain)",
+    ]
+
+    # Strommessbereiche (0 = Dynamisches Autoranging)
+    CR_VALUES_STANDARD = [
+        "0 (Autoranging - Dynamisch)",
+        "1 (±10 mA / 100 Ω)",
+        "2 (±100 µA / 10 kΩ)",
+        "4 (±1 µA / 1 MΩ)",
+        "6 (±10 nA / 100 MΩ)",
+    ]
+    CR_VALUES_MEDICAL = [
+        "0 (Autoranging - Dynamisch für L/C)",
+        "1 (±10 mA / 100 Ω Range)",
+        "2 (±100 µA / 10 kΩ Range)",
+        "4 (±1 µA / 1 MΩ Range)",
+        "6 (±10 nA / 100 MΩ Range)",
+    ]
+
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("Sciospec ISX-3 - Professioneller Mess-Manager")
-        self.root.geometry("1020x900")
-        self.root.minsize(940, 800)
+        self.root.title("Sciospec ISX-3 - Professioneller Mess-Manager (Standard & Medical)")
+        self.root.geometry("1120x910")
+        self.root.minsize(1000, 800)
 
         self.config_dir = os.path.abspath("config")
         os.makedirs(self.config_dir, exist_ok=True)
@@ -38,15 +86,17 @@ class ConfigGUI:
         self._build_ui()
         self.load_ini_to_form()
 
+    def _is_medical(self) -> bool:
+        """Prueft, ob der Medical-Modus aktiv ist."""
+        return "medical" in self.device_version_var.get().lower()
+
     @staticmethod
     def _write_default_ini(target_path: str) -> None:
+        """Schreibt eine Standardkonfiguration, falls noch keine existiert."""
         default_content = """[Connection]
-interface_type = COM
+device_version = standard
 port = COM12
 baudrate = 115200
-ip_address = 192.168.1.100
-tcp_port = 5000
-tcp_watchdog_interval_s = 60
 
 [MUX]
 enabled = False
@@ -112,27 +162,42 @@ live_plot_mode = point
         with open(target_path, "w", encoding="utf-8") as f:
             f.write(default_content)
 
-    def _show_info(self, title: str, text: str) -> None:
-        messagebox.showinfo(title, text)
-
     def _show_pin_help(self) -> None:
+        """Zeigt ein Informationsfenster fuer die MUX-Pin-Adressierung an."""
         help_text = (
-            "Hilfe zur Pin-Belegung (MUX32):\n\n"
-            "Du kannst die Sensoren auf zwei Arten definieren:\n"
+            "Hilfe zur Pin-Belegung (MUX32 / MUX64):\n\n"
             "1. Standard-Bereiche (z.B. '1-8'):\n"
-            "   Nutzt die automatische 4-Leiter-Berechnung (CE, RE, WS, WE).\n\n"
-            "2. Individuelle Pin-Belegung (z.B. '1: 4,8,9,12'):\n"
-            "   Weist einem Sensor explizit 4 Pins zu.\n"
-            "   Reihenfolge der Pins: Counter (CE), Reference (RE), Working Sense (WS), Work (WE).\n\n"
-            "Mehrere Sensoren können mit Kommas getrennt werden:\n"
-            "Beispiel: '1: 4,8,9,12, 2: 5,6,7,10'"
+            "   • Standard-Geraet: Automatische 4-Leiter-Berechnung (Pins 1..4 fuer Sensor 1 usw.).\n"
+            "   • Medical-Geraet: Schaltet CE, RE, WS, WE auf denselben Kanal.\n\n"
+            "2. Individuelle Pin-Belegung (CE, RE, WS, WE):\n"
+            "   Beispiel fuer Direkt-Adressierung: '22: 22,22,23,23'\n"
+            "   Mehrere Sensoren mit Semikolon getrennt: '1: 21,21,22,22; 2: 22,22,23,23'"
         )
-        messagebox.showinfo("MUX Pin-Belegung - Hilfe", help_text, parent=self.root)
+        messagebox.showinfo("MUX Pin-Belegung", help_text, parent=self.root)
+
+    def _show_device_comparison_info(self) -> None:
+        """Zeigt Details zu Geraete-Unterschieden an."""
+        info_text = (
+            "Detaillierter Vergleich: Standard ISX-3 vs. Medical Research ISX-3\n"
+            "==================================================================\n\n"
+            "1. AMPLITUDEN-EINGABE (Peak vs. Peak-to-Peak):\n"
+            "   • Standard ISX-3: Eingabe als echter Spitzenwert (Peak: A bzw. V).\n"
+            "   • Medical Research ISX-3: Eingabe als Spitze-Spitze (App bzw. Vpp).\n"
+            "     -> Die API halbiert App / Vpp automatisch fuer die Hardware!\n\n"
+            "2. SPANNUNGSMESSBEREICHE (Voltage Range in 0xB0):\n"
+            "   • Standard: 1 = ±1.0 V Peak | 2 = ±0.09 V (±90 mV) Peak\n"
+            "   • Medical: 1 = ±2.0 Vpp | 2 = ±180 mVpp\n\n"
+            "3. SYSTEM-BASELINE-DRIFT-CHECK:\n"
+            "   • Ueberprueft die thermische Stabilitaet des internen 2 kΩ Referenzpfads auf MUX-Port 3."
+        )
+        messagebox.showinfo("Info: Standard vs. Medical Einstellungen", info_text, parent=self.root)
 
     def _log(self, msg: str) -> None:
+        """Gibt Meldungen im Statusfenster der GUI und im Terminal aus."""
         if hasattr(self, "log_text"):
             self.log_text.insert(tk.END, msg + "\n")
             self.log_text.see(tk.END)
+            self.root.update_idletasks()
         print(msg)
 
     @staticmethod
@@ -158,73 +223,94 @@ live_plot_mode = point
         self._log(f"[INFO] Gefundene COM-Ports: {', '.join(ports)}")
 
     def _build_ui(self) -> None:
-        profile_frame = ttk.LabelFrame(self.root, text=" Profil-Verwaltung ", padding=8)
-        profile_frame.pack(fill=tk.X, padx=10, pady=5)
+        # 1. Profil-Verwaltung oben
+        profile_frame = ttk.LabelFrame(self.root, text=" Profil-Verwaltung & Diagnose ", padding=8)
+        profile_frame.pack(fill=tk.X, padx=10, pady=4)
 
         ttk.Label(profile_frame, text="Profil-Name:").grid(row=0, column=0, sticky=tk.W, padx=5)
         self.profile_name_var = tk.StringVar(value="config")
-        ttk.Entry(profile_frame, textvariable=self.profile_name_var, width=20).grid(row=0, column=1, sticky=tk.W, padx=5)
+        ttk.Entry(profile_frame, textvariable=self.profile_name_var, width=18).grid(row=0, column=1, sticky=tk.W, padx=5)
 
-        ttk.Button(profile_frame, text="💾 Profil speichern", command=self.save_named_profile).grid(row=0, column=2, padx=5)
+        ttk.Button(profile_frame, text="Profil speichern", command=self.save_named_profile).grid(row=0, column=2, padx=5)
 
-        ttk.Label(profile_frame, text="Vorhandene Profile:").grid(row=0, column=3, sticky=tk.W, padx=15)
-        self.profiles_combo = ttk.Combobox(profile_frame, width=22, state="readonly")
+        ttk.Label(profile_frame, text="Vorhandene Profile:").grid(row=0, column=3, sticky=tk.W, padx=10)
+        self.profiles_combo = ttk.Combobox(profile_frame, width=20, state="readonly")
         self.profiles_combo.grid(row=0, column=4, padx=5)
         self.profiles_combo.bind("<<ComboboxSelected>>", self.load_selected_profile)
         self.refresh_profile_list()
 
-        ttk.Button(profile_frame, text="🚀 MESSUNG STARTEN", command=self.start_measurement_action).grid(
-            row=0, column=5, padx=20, sticky=tk.E
+        ttk.Button(
+            profile_frame,
+            text="System-Baseline-Drift-Check",
+            command=self.run_selftest_action,
+        ).grid(row=0, column=5, padx=10)
+
+        ttk.Button(profile_frame, text="MESSUNG STARTEN", command=self.start_measurement_action).grid(
+            row=0, column=6, padx=10, sticky=tk.E
         )
 
+        # 2. Status-Banner oben
+        self.info_banner_frame = tk.Frame(self.root, bg="#e8f4f8", highlightbackground="#006699", highlightthickness=1, padx=10, pady=6)
+        self.info_banner_frame.pack(fill=tk.X, padx=10, pady=4)
+
+        self.info_banner_label = tk.Label(
+            self.info_banner_frame,
+            text="",
+            bg="#e8f4f8",
+            fg="#00334e",
+            font=("Segoe UI", 9, "bold"),
+            justify=tk.LEFT,
+            anchor="w",
+        )
+        self.info_banner_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        ttk.Button(
+            self.info_banner_frame,
+            text="Details (Standard vs. Medical)",
+            command=self._show_device_comparison_info,
+        ).pack(side=tk.RIGHT, padx=5)
+
+        # 3. Haupt-Notebook
         notebook = ttk.Notebook(self.root)
-        notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=4)
 
         tab_main = ttk.Frame(notebook, padding=10)
         tab_signal = ttk.Frame(notebook, padding=10)
         tab_plot = ttk.Frame(notebook, padding=10)
 
-        notebook.add(tab_main, text=" 1. Schnittstelle, Kanal & Frequenzblöcke ")
+        notebook.add(tab_main, text=" 1. Geraet, USB/COM, Kanal & Frequenzbloecke ")
         notebook.add(tab_signal, text=" 2. Anregung, Messbereiche & Timing ")
-        notebook.add(tab_plot, text=" 3. DC-Bias & Live-Plot ")
+        notebook.add(tab_plot, text=" 3. Zeitstempel & Live-Plot ")
 
-        conn_frame = ttk.LabelFrame(tab_main, text=" Verbindung (USB / RS232 / Ethernet) ", padding=8)
-        conn_frame.pack(fill=tk.X, pady=5)
+        # TAB 1: Verbindung
+        conn_frame = ttk.LabelFrame(tab_main, text=" Geraete-Modell & Serielle Verbindung (USB / Virtual COM Port) ", padding=8)
+        conn_frame.pack(fill=tk.X, pady=4)
 
-        ttk.Label(conn_frame, text="Schnittstelle:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=3)
-        self.interface_var = tk.StringVar(value="COM")
-        interface_combo = ttk.Combobox(conn_frame, textvariable=self.interface_var, values=["COM", "TCP"], width=8, state="readonly")
-        interface_combo.grid(row=0, column=1, sticky=tk.W, padx=5, pady=3)
-        interface_combo.bind("<<ComboboxSelected>>", self._on_interface_change)
+        ttk.Label(conn_frame, text="Geraete-Modell:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=4)
+        self.device_version_var = tk.StringVar(value=self.DEVICE_VERSIONS[0])
+        dev_combo = ttk.Combobox(
+            conn_frame,
+            textvariable=self.device_version_var,
+            values=self.DEVICE_VERSIONS,
+            width=32,
+            state="readonly",
+        )
+        dev_combo.grid(row=0, column=1, sticky=tk.W, padx=5, pady=4)
+        dev_combo.bind("<<ComboboxSelected>>", self._on_device_version_change)
 
-        self.com_subframe = ttk.Frame(conn_frame)
-        self.com_subframe.grid(row=0, column=2, columnspan=5, sticky=tk.W, padx=10)
-
-        ttk.Label(self.com_subframe, text="COM-Port:").grid(row=0, column=0, sticky=tk.W, padx=5)
+        ttk.Label(conn_frame, text="COM-Port:").grid(row=0, column=2, sticky=tk.W, padx=(20, 5), pady=4)
         self.port_var = tk.StringVar(value="COM12")
-        self.port_combo = ttk.Combobox(self.com_subframe, textvariable=self.port_var, values=self._get_available_com_ports(), width=10)
-        self.port_combo.grid(row=0, column=1, padx=3)
-        ttk.Button(self.com_subframe, text="🔄", width=3, command=self._refresh_com_ports).grid(row=0, column=2, padx=2)
+        self.port_combo = ttk.Combobox(conn_frame, textvariable=self.port_var, values=self._get_available_com_ports(), width=10)
+        self.port_combo.grid(row=0, column=3, padx=3, pady=4)
+        ttk.Button(conn_frame, text="Neu laden", command=self._refresh_com_ports).grid(row=0, column=4, padx=2, pady=4)
 
-        ttk.Label(self.com_subframe, text="Baudrate:").grid(row=0, column=3, sticky=tk.W, padx=10)
+        ttk.Label(conn_frame, text="Baudrate:").grid(row=0, column=5, sticky=tk.W, padx=(15, 5), pady=4)
         self.baud_var = tk.StringVar(value="115200")
-        ttk.Combobox(self.com_subframe, textvariable=self.baud_var, values=["9600", "57600", "115200", "230400", "921600"], width=10).grid(row=0, column=4, padx=3)
+        ttk.Combobox(conn_frame, textvariable=self.baud_var, values=["9600", "57600", "115200", "230400", "921600"], width=10).grid(row=0, column=6, padx=3, pady=4)
 
-        self.tcp_subframe = ttk.Frame(conn_frame)
-        ttk.Label(self.tcp_subframe, text="IP-Adresse:").grid(row=0, column=0, sticky=tk.W, padx=5)
-        self.ip_var = tk.StringVar(value="192.168.1.100")
-        ttk.Entry(self.tcp_subframe, textvariable=self.ip_var, width=15).grid(row=0, column=1, padx=3)
-
-        ttk.Label(self.tcp_subframe, text="TCP-Port:").grid(row=0, column=2, sticky=tk.W, padx=10)
-        self.tcp_port_var = tk.StringVar(value="5000")
-        ttk.Entry(self.tcp_subframe, textvariable=self.tcp_port_var, width=8).grid(row=0, column=3, padx=3)
-
-        ttk.Label(self.tcp_subframe, text="Watchdog (s):").grid(row=0, column=4, sticky=tk.W, padx=10)
-        self.watchdog_var = tk.StringVar(value="60")
-        ttk.Entry(self.tcp_subframe, textvariable=self.watchdog_var, width=6).grid(row=0, column=5, padx=3)
-
+        # TAB 1: Routing & MUX
         mode_frame = ttk.LabelFrame(tab_main, text=" Betriebsart & Hardware-Routing (0xB0 / 0xB2) ", padding=8)
-        mode_frame.pack(fill=tk.X, pady=5)
+        mode_frame.pack(fill=tk.X, pady=4)
 
         ttk.Label(mode_frame, text="Messvariante:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
         self.mode_selector_var = tk.StringVar(value="Main Port (Front-BNC)")
@@ -259,31 +345,32 @@ live_plot_mode = point
         self.frame_mux = ttk.Frame(self.dynamic_container)
         ttk.Label(self.frame_mux, text="Aktive Sensoren / Pins:").grid(row=0, column=0, sticky=tk.W, padx=5)
         self.mux_sensors_var = tk.StringVar(value="1-8")
-        ttk.Entry(self.frame_mux, textvariable=self.mux_sensors_var, width=15).grid(row=0, column=1, padx=5)
-        
-        ttk.Button(self.frame_mux, text="❓ Hilfe zu Pins", command=self._show_pin_help).grid(row=0, column=2, padx=5)
+        ttk.Entry(self.frame_mux, textvariable=self.mux_sensors_var, width=22).grid(row=0, column=1, padx=5)
+
+        ttk.Button(self.frame_mux, text="Hilfe zu Pins", command=self._show_pin_help).grid(row=0, column=2, padx=5)
 
         ttk.Label(self.frame_mux, text="Leiter-Modus:").grid(row=0, column=3, sticky=tk.W, padx=8)
         self.mux_mode_var = tk.StringVar(value="4")
         ttk.Combobox(self.frame_mux, textvariable=self.mux_mode_var, values=["2", "4"], width=5, state="readonly").grid(row=0, column=4, padx=5)
 
         ttk.Label(self.frame_mux, text="MUX-Port (0xB0):").grid(row=0, column=5, sticky=tk.W, padx=8)
-        self.mux_chan_var = tk.StringVar(value="2 (ExtPort)")
-        ttk.Combobox(
+        self.mux_chan_var = tk.StringVar(value="2 (ext. Mux32 / ExtPort)")
+        self.mux_chan_combo = ttk.Combobox(
             self.frame_mux,
             textvariable=self.mux_chan_var,
-            values=["2 (ExtPort)", "3 (InternalMux / EXT2)"],
-            width=20,
+            values=["2 (ext. Mux32 / ExtPort)", "3 (int. Mux32 / InternalMux)"],
+            width=24,
             state="readonly",
-        ).grid(row=0, column=6, padx=5)
+        )
+        self.mux_chan_combo.grid(row=0, column=6, padx=5)
 
         ttk.Label(self.frame_mux, text="Switch Delay (s):").grid(row=0, column=7, sticky=tk.W, padx=8)
         self.mux_delay_var = tk.StringVar(value="0.10")
         ttk.Entry(self.frame_mux, textvariable=self.mux_delay_var, width=7).grid(row=0, column=8, padx=5)
 
-        # Frequenz-Blöcke (Tabelle erweitert um Anregung & Amplitude)
-        block_frame = ttk.LabelFrame(tab_main, text=" Frequenz-Blöcke & Block-Spezifische Anregung (0xB6 0x03) ", padding=8)
-        block_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+        # TAB 1: Frequenz-Bloecke
+        block_frame = ttk.LabelFrame(tab_main, text=" Frequenz-Bloecke & Block-Spezifische Anregung (0xB6 0x03) ", padding=8)
+        block_frame.pack(fill=tk.BOTH, expand=True, pady=4)
 
         columns = ("min_f", "max_f", "steps", "scale", "precision", "exc_type", "amplitude")
         self.block_tree = ttk.Treeview(block_frame, columns=columns, show="headings", height=4)
@@ -293,15 +380,15 @@ live_plot_mode = point
         self.block_tree.heading("scale", text="Scale")
         self.block_tree.heading("precision", text="Precision")
         self.block_tree.heading("exc_type", text="Anregung")
-        self.block_tree.heading("amplitude", text="Amplitude")
+        self.block_tree.heading("amplitude", text="Amplitude [A / V]")
 
-        self.block_tree.column("min_f", width=110, anchor=tk.CENTER)
-        self.block_tree.column("max_f", width=110, anchor=tk.CENTER)
+        self.block_tree.column("min_f", width=105, anchor=tk.CENTER)
+        self.block_tree.column("max_f", width=105, anchor=tk.CENTER)
         self.block_tree.column("steps", width=60, anchor=tk.CENTER)
         self.block_tree.column("scale", width=90, anchor=tk.CENTER)
-        self.block_tree.column("precision", width=90, anchor=tk.CENTER)
-        self.block_tree.column("exc_type", width=110, anchor=tk.CENTER)
-        self.block_tree.column("amplitude", width=90, anchor=tk.CENTER)
+        self.block_tree.column("precision", width=85, anchor=tk.CENTER)
+        self.block_tree.column("exc_type", width=130, anchor=tk.CENTER)
+        self.block_tree.column("amplitude", width=130, anchor=tk.CENTER)
         self.block_tree.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=5, pady=5)
 
         self.block_tree.bind("<Double-1>", lambda event: self._edit_frequency_block())
@@ -309,69 +396,79 @@ live_plot_mode = point
         btn_subframe = ttk.Frame(block_frame)
         btn_subframe.pack(side=tk.TOP, fill=tk.X, padx=5, pady=2)
 
-        ttk.Button(btn_subframe, text="➕ Block hinzufügen", command=self._add_frequency_block).pack(side=tk.LEFT, padx=3)
-        ttk.Button(btn_subframe, text="✏️ Ausgewählten Block bearbeiten (oder Doppelklick)", command=self._edit_frequency_block).pack(side=tk.LEFT, padx=3)
-        ttk.Button(btn_subframe, text="🗑️ Block löschen", command=self._delete_frequency_block).pack(side=tk.LEFT, padx=3)
+        ttk.Button(btn_subframe, text="Block hinzufuegen", command=self._add_frequency_block).pack(side=tk.LEFT, padx=3)
+        ttk.Button(btn_subframe, text="Block bearbeiten", command=self._edit_frequency_block).pack(side=tk.LEFT, padx=3)
+        ttk.Button(btn_subframe, text="Block loeschen", command=self._delete_frequency_block).pack(side=tk.LEFT, padx=3)
 
-        # TAB 2: ANREGUNG, MESSBEREICHE & TIMING
+        # TAB 2: Signal & Bereiche
         exc_frame = ttk.LabelFrame(tab_signal, text=" Globale Anregung & Analoge Frontend-Messbereiche ", padding=10)
         exc_frame.pack(fill=tk.X, pady=5)
 
-        ttk.Label(exc_frame, text="Globale Anregungsart:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=4)
-        self.exc_type_var = tk.StringVar(value="2 (Current / Strom in A)")
-        exc_combo = ttk.Combobox(
+        self.tab2_mode_hint = tk.Label(
+            exc_frame,
+            text="",
+            bg="#fff8dc",
+            fg="#333333",
+            font=("Segoe UI", 9),
+            justify=tk.LEFT,
+            anchor="w",
+            padx=8,
+            pady=5,
+            relief=tk.SOLID,
+            bd=1,
+        )
+        self.tab2_mode_hint.grid(row=0, column=0, columnspan=3, sticky=tk.W + tk.E, padx=5, pady=6)
+
+        ttk.Label(exc_frame, text="Globale Anregungsart:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=4)
+        self.exc_type_var = tk.StringVar(value=self.EXC_VALUES_STANDARD[1])
+        self.exc_combo = ttk.Combobox(
             exc_frame,
             textvariable=self.exc_type_var,
-            values=["1 (Voltage / Spannung in V)", "2 (Current / Strom in A)"],
-            width=26,
+            values=self.EXC_VALUES_STANDARD,
+            width=34,
             state="readonly",
         )
-        exc_combo.grid(row=0, column=1, sticky=tk.W, padx=5, pady=4)
-        exc_combo.bind("<<ComboboxSelected>>", self._on_excitation_change)
+        self.exc_combo.grid(row=1, column=1, sticky=tk.W, padx=5, pady=4)
+        self.exc_combo.bind("<<ComboboxSelected>>", self._on_excitation_change)
 
-        self.amp_label = ttk.Label(exc_frame, text="Globale Signalamplitude:")
-        self.amp_label.grid(row=1, column=0, sticky=tk.W, padx=5, pady=4)
+        self.amp_label = ttk.Label(exc_frame, text="Globale Signalamplitude [A / V Peak]:")
+        self.amp_label.grid(row=2, column=0, sticky=tk.W, padx=5, pady=4)
         self.amp_var = tk.StringVar(value="0.0001")
-        ttk.Entry(exc_frame, textvariable=self.amp_var, width=28).grid(row=1, column=1, sticky=tk.W, padx=5, pady=4)
+        ttk.Entry(exc_frame, textvariable=self.amp_var, width=36).grid(row=2, column=1, sticky=tk.W, padx=5, pady=4)
+        self.amp_unit_hint = ttk.Label(exc_frame, text="(z.B. 0.0001 = 100 µA Peak)", foreground="#555555")
+        self.amp_unit_hint.grid(row=2, column=2, sticky=tk.W, padx=5)
 
-        ttk.Label(exc_frame, text="Current Range (Strommessbereich):").grid(row=2, column=0, sticky=tk.W, padx=5, pady=4)
-        self.curr_range_var = tk.StringVar(value="2 (±100uA / 10kΩ)")
-        ttk.Combobox(
+        ttk.Label(exc_frame, text="Current Range (Strommessbereich):").grid(row=3, column=0, sticky=tk.W, padx=5, pady=4)
+        self.curr_range_var = tk.StringVar(value=self.CR_VALUES_STANDARD[2])
+        self.curr_range_combo = ttk.Combobox(
             exc_frame,
             textvariable=self.curr_range_var,
-            values=[
-                "0 (Autoranging - nur bei Voltage!)",
-                "1 (±10mA / 100Ω)",
-                "2 (±100uA / 10kΩ)",
-                "4 (±1uA / 1MΩ)",
-                "6 (±10nA / 100MΩ)",
-            ],
-            width=26,
+            values=self.CR_VALUES_STANDARD,
+            width=34,
             state="readonly",
-        ).grid(row=2, column=1, sticky=tk.W, padx=5, pady=4)
+        )
+        self.curr_range_combo.grid(row=3, column=1, sticky=tk.W, padx=5, pady=4)
 
-        ttk.Label(exc_frame, text="Voltage Range (Spannungsmessbereich):").grid(row=3, column=0, sticky=tk.W, padx=5, pady=4)
-        self.volt_range_var = tk.StringVar(value="1 (±1.0V Default)")
-        ttk.Combobox(
+        self.volt_range_label = ttk.Label(exc_frame, text="Voltage Range (Spannungsmessbereich):")
+        self.volt_range_label.grid(row=4, column=0, sticky=tk.W, padx=5, pady=4)
+        self.volt_range_var = tk.StringVar(value=self.VR_VALUES_STANDARD[0])
+        self.volt_range_combo = ttk.Combobox(
             exc_frame,
             textvariable=self.volt_range_var,
-            values=[
-                "0 (Autoranging)",
-                "1 (±1.0V Default)",
-                "2 (±0.09V High Gain)",
-            ],
-            width=26,
+            values=self.VR_VALUES_STANDARD,
+            width=34,
             state="readonly",
-        ).grid(row=3, column=1, sticky=tk.W, padx=5, pady=4)
+        )
+        self.volt_range_combo.grid(row=4, column=1, sticky=tk.W, padx=5, pady=4)
 
         prec_frame = ttk.LabelFrame(tab_signal, text=" Timing, Spektrale Wiederholungen & Mittelung ", padding=10)
         prec_frame.pack(fill=tk.X, pady=5)
 
-        ttk.Label(prec_frame, text="Anzahl Spectra (Wiederholungen):").grid(row=0, column=0, sticky=tk.W, padx=5, pady=4)
+        ttk.Label(prec_frame, text="Anzahl Spectra (Average Count / Wiederholungen):").grid(row=0, column=0, sticky=tk.W, padx=5, pady=4)
         self.spectra_var = tk.StringVar(value="3")
         ttk.Entry(prec_frame, textvariable=self.spectra_var, width=28).grid(row=0, column=1, sticky=tk.W, padx=5, pady=4)
 
-        ttk.Label(prec_frame, text="Point Delay (ms):").grid(row=1, column=0, sticky=tk.W, padx=5, pady=4)
+        ttk.Label(prec_frame, text="Point Delay / Settling Time (ms):").grid(row=1, column=0, sticky=tk.W, padx=5, pady=4)
         self.delay_var = tk.StringVar(value="20.0")
         ttk.Entry(prec_frame, textvariable=self.delay_var, width=28).grid(row=1, column=1, sticky=tk.W, padx=5, pady=4)
 
@@ -382,22 +479,15 @@ live_plot_mode = point
         self.phase_sync_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(
             prec_frame,
-            text="Phase Synchronization aktivieren (nur für f >= 100 kHz bei resonanten Sensoren)",
+            text="Phase Synchronization aktivieren (nur fuer f >= 100 kHz)",
             variable=self.phase_sync_var,
         ).grid(row=3, column=0, columnspan=3, sticky=tk.W, padx=5, pady=4)
 
-        # TAB 3: DC-BIAS, PROTOKOLL-OPTIONEN & LIVE-PLOT
-        opt_frame = ttk.LabelFrame(tab_plot, text=" DC-Bias & Datenframe-Optionen (0x97) ", padding=10)
+        # TAB 3: Optionen & Plot
+        opt_frame = ttk.LabelFrame(tab_plot, text=" Datenframe-Optionen (0x97) ", padding=10)
         opt_frame.pack(fill=tk.X, pady=5)
 
-        self.dc_bias_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(opt_frame, text="DC-Bias aktiv (nur BNC Port 1)", variable=self.dc_bias_var).grid(row=0, column=0, sticky=tk.W, padx=5, pady=3)
-
-        ttk.Label(opt_frame, text="Bias-Spannung (-1.0 bis +1.0 V):").grid(row=0, column=1, sticky=tk.W, padx=10, pady=3)
-        self.bias_volt_var = tk.StringVar(value="0.0")
-        ttk.Entry(opt_frame, textvariable=self.bias_volt_var, width=10).grid(row=0, column=2, sticky=tk.W, padx=5, pady=3)
-
-        ttk.Label(opt_frame, text="Hardware-Zeitstempel (0x97):").grid(row=1, column=0, sticky=tk.W, padx=5, pady=3)
+        ttk.Label(opt_frame, text="Hardware-Zeitstempel (in HDF5 unter 'hw_timestamp'):").grid(row=0, column=0, sticky=tk.W, padx=5, pady=3)
         self.ts_mode_var = tk.StringVar(value="0 (Aus)")
         ttk.Combobox(
             opt_frame,
@@ -405,28 +495,28 @@ live_plot_mode = point
             values=["0 (Aus)", "1 (Millisekunden - 4 Byte)", "2 (Mikrosekunden - 5 Byte)"],
             width=26,
             state="readonly",
-        ).grid(row=1, column=1, columnspan=2, sticky=tk.W, padx=5, pady=3)
+        ).grid(row=0, column=1, columnspan=2, sticky=tk.W, padx=5, pady=3)
 
         self.curr_range_out_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(
             opt_frame,
-            text="Aktuellen Current-Range im Messframe ausgeben (0x97 Option 0x04)",
+            text="Aktuellen Current-Range im Messframe ausgeben (Option 0x04)",
             variable=self.curr_range_out_var,
-        ).grid(row=2, column=0, columnspan=3, sticky=tk.W, padx=5, pady=3)
+        ).grid(row=1, column=0, columnspan=3, sticky=tk.W, padx=5, pady=3)
 
         plot_frame = ttk.LabelFrame(tab_plot, text=" Visualisierung & Live-Plot Optionen ", padding=10)
         plot_frame.pack(fill=tk.X, pady=5)
 
         self.live_plot_enabled_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(plot_frame, text="Live-Plot während Messung anzeigen", variable=self.live_plot_enabled_var).grid(row=0, column=0, sticky=tk.W, padx=5, pady=3)
+        ttk.Checkbutton(plot_frame, text="Live-Plot waehrend Messung anzeigen", variable=self.live_plot_enabled_var).grid(row=0, column=0, sticky=tk.W, padx=5, pady=3)
 
         ttk.Label(plot_frame, text="Diagramm-Typ:").grid(row=0, column=1, sticky=tk.W, padx=15, pady=3)
         self.plot_type_var = tk.StringVar(value="bode")
         ttk.Combobox(
             plot_frame,
             textvariable=self.plot_type_var,
-            values=["bode", "nyquist", "impedance_frequency"],
-            width=20,
+            values=["bode", "bode_lin", "nyquist", "impedance_frequency"],
+            width=22,
             state="readonly",
         ).grid(row=0, column=2, sticky=tk.W, padx=5, pady=3)
 
@@ -441,60 +531,155 @@ live_plot_mode = point
         ).grid(row=1, column=1, columnspan=2, sticky=tk.W, padx=5, pady=3)
 
         log_frame = ttk.LabelFrame(self.root, text=" Live-Status & Log ", padding=5)
-        log_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
-        self.log_text = tk.Text(log_frame, height=5, bg="#1e1e1e", fg="#00ff00", font=("Consolas", 9))
+        log_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=4)
+        self.log_text = tk.Text(log_frame, height=6, bg="#1e1e1e", fg="#00ff00", font=("Consolas", 9))
         self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        self._on_interface_change(None)
         self._on_mode_change(None)
+        self._update_device_specific_labels()
+
+    def _update_device_specific_labels(self) -> None:
+        """Passt Labels und Hinweise je nach gewaehltem Geraetetyp an."""
+        is_med = self._is_medical()
+
+        exc_code = "1" if self.exc_type_var.get().startswith("1") else "2"
+        vr_code = self.volt_range_var.get().split()[0] if self.volt_range_var.get() else "1"
+        if vr_code not in ("1", "2"):
+            vr_code = "1"
+        cr_code = self.curr_range_var.get().split()[0] if self.curr_range_var.get() else "2"
+
+        if is_med:
+            self.info_banner_frame.configure(bg="#e6f7ee", highlightbackground="#1b8a5a")
+            self.info_banner_label.configure(
+                bg="#e6f7ee",
+                fg="#0d4d31",
+                text=(
+                    "AKTIVER MODUS: MEDICAL RESEARCH ISX-3\n"
+                    "• Amplituden-Eingabe: Spitze-Spitze in App / Vpp (API halbiert automatisch fuer Hardware).\n"
+                    "• Spannungsbereiche: ±2.0 Vpp / ±180 mVpp | Interner MUX = Port 3."
+                ),
+            )
+            self.tab2_mode_hint.configure(
+                bg="#e6f7ee",
+                fg="#0d4d31",
+                text=(
+                    "Medical-Modus aktiv: Gib Amplituden als App / Vpp (Spitze-Spitze) ein.\n"
+                    "Fuer Spulen (L) und Kondensatoren (C) empfiehlt sich Current Range = '0 (Autoranging)'."
+                ),
+            )
+            self.exc_combo["values"] = self.EXC_VALUES_MEDICAL
+            self.exc_type_var.set(self.EXC_VALUES_MEDICAL[0] if exc_code == "1" else self.EXC_VALUES_MEDICAL[1])
+
+            self.volt_range_combo["values"] = self.VR_VALUES_MEDICAL
+            vr_map = {"1": self.VR_VALUES_MEDICAL[0], "2": self.VR_VALUES_MEDICAL[1]}
+            self.volt_range_var.set(vr_map.get(vr_code, self.VR_VALUES_MEDICAL[0]))
+
+            self.curr_range_combo["values"] = self.CR_VALUES_MEDICAL
+            cr_map = {c.split()[0]: c for c in self.CR_VALUES_MEDICAL}
+            self.curr_range_var.set(cr_map.get(cr_code, self.CR_VALUES_MEDICAL[2]))
+
+            unit_str = "Vpp" if exc_code == "1" else "App"
+            self.amp_label.configure(text=f"Globale Signalamplitude [{unit_str} (Spitze-Spitze)]:")
+            self.amp_unit_hint.configure(text=f"(z.B. 0.0001 oder 100u = 100 µ{unit_str})")
+            self.block_tree.heading("amplitude", text="Amplitude [App / Vpp]")
+        else:
+            self.info_banner_frame.configure(bg="#e8f4f8", highlightbackground="#006699")
+            self.info_banner_label.configure(
+                bg="#e8f4f8",
+                fg="#00334e",
+                text=(
+                    "AKTIVER MODUS: STANDARD ISX-3 / ISX-3mini\n"
+                    "• Amplituden-Eingabe: Echter Spitzenwert (Peak) in A / V (wird 1:1 an Hardware gesendet).\n"
+                    "• Spannungsbereiche: ±1.0 V Peak / ±0.09 V Peak | MUX ueber Extension Port (Port 2 via 0xB2)."
+                ),
+            )
+            self.tab2_mode_hint.configure(
+                bg="#e8f4f8",
+                fg="#00334e",
+                text=(
+                    "Standard-Modus aktiv: Gib Amplituden als echte Spitzenwerte (Peak in A / V) ein.\n"
+                    "0.0001 entspricht hier direkt 100 µA Peak."
+                ),
+            )
+            self.exc_combo["values"] = self.EXC_VALUES_STANDARD
+            self.exc_type_var.set(self.EXC_VALUES_STANDARD[0] if exc_code == "1" else self.EXC_VALUES_STANDARD[1])
+
+            self.volt_range_combo["values"] = self.VR_VALUES_STANDARD
+            vr_map = {"1": self.VR_VALUES_STANDARD[0], "2": self.VR_VALUES_STANDARD[1]}
+            self.volt_range_var.set(vr_map.get(vr_code, self.VR_VALUES_STANDARD[0]))
+
+            self.curr_range_combo["values"] = self.CR_VALUES_STANDARD
+            cr_map = {c.split()[0]: c for c in self.CR_VALUES_STANDARD}
+            self.curr_range_var.set(cr_map.get(cr_code, self.CR_VALUES_STANDARD[2]))
+
+            unit_str = "V Peak" if exc_code == "1" else "A Peak"
+            self.amp_label.configure(text=f"Globale Signalamplitude [{unit_str}]:")
+            self.amp_unit_hint.configure(text=f"(z.B. 0.0001 = 100 µ{unit_str[0]} Peak)")
+            self.block_tree.heading("amplitude", text="Amplitude [A / V Peak]")
+
+        for item_id in self.block_tree.get_children():
+            vals = list(self.block_tree.item(item_id, "values"))
+            if len(vals) >= 6:
+                is_volt = "Voltage" in str(vals[5]) or str(vals[5]).strip() == "1"
+                if is_med:
+                    vals[5] = "Voltage [Vpp]" if is_volt else "Current [App]"
+                else:
+                    vals[5] = "Voltage [V Peak]" if is_volt else "Current [A Peak]"
+                self.block_tree.item(item_id, values=vals)
+
+    def _on_device_version_change(self, event) -> None:
+        self._update_device_specific_labels()
+        if self._is_medical():
+            self._log("[INFO] Medical Research ISX-3 gewaehlt: Eingaben in App / Vpp, int. MUX Port 3 aktiv.")
+        else:
+            self._log("[INFO] Standard ISX-3 gewaehlt: Eingaben in A / V (Peak), ext. MUX Port 2 aktiv.")
 
     def _add_frequency_block(self) -> None:
+        is_med = self._is_medical()
         dlg = tk.Toplevel(self.root)
-        dlg.title("Frequenzblock hinzufügen")
-        dlg.geometry("380x420")
+        dlg.title("Frequenzblock hinzufuegen")
+        dlg.geometry("430x450")
         dlg.transient(self.root)
         dlg.grab_set()
 
-        lbl_hint = ttk.Label(
-            dlg,
-            text="💡 Tipp: Einheiten wie '100k' oder '1M'\nwerden automatisch umgerechnet.",
-            foreground="#0055aa",
-            justify=tk.LEFT,
-        )
-        lbl_hint.grid(row=0, column=0, columnspan=2, sticky=tk.W, padx=10, pady=5)
+        mode_note = "Medical-Modus: Amplitude als Spitze-Spitze (App / Vpp)" if is_med else "Standard-Modus: Amplitude als Spitzenwert (A / V Peak)"
+        lbl_hint = ttk.Label(dlg, text=f"Einheiten wie '100k', '1M' oder '100u' werden erkannt.\n{mode_note}", foreground="#0055aa", justify=tk.LEFT)
+        lbl_hint.grid(row=0, column=0, columnspan=2, sticky=tk.W, padx=10, pady=6)
 
         ttk.Label(dlg, text="Min f [Hz]:").grid(row=1, column=0, sticky=tk.W, padx=10, pady=5)
-        e_min = ttk.Entry(dlg, width=18)
+        e_min = ttk.Entry(dlg, width=22)
         e_min.grid(row=1, column=1, padx=10, pady=5)
         e_min.insert(0, "100")
 
         ttk.Label(dlg, text="Max f [Hz]:").grid(row=2, column=0, sticky=tk.W, padx=10, pady=5)
-        e_max = ttk.Entry(dlg, width=18)
+        e_max = ttk.Entry(dlg, width=22)
         e_max.grid(row=2, column=1, padx=10, pady=5)
-        e_max.insert(0, "1k")
+        e_max.insert(0, "1M")
 
         ttk.Label(dlg, text="Steps (Punkte):").grid(row=3, column=0, sticky=tk.W, padx=10, pady=5)
-        e_steps = ttk.Entry(dlg, width=18)
+        e_steps = ttk.Entry(dlg, width=22)
         e_steps.grid(row=3, column=1, padx=10, pady=5)
-        e_steps.insert(0, "50")
+        e_steps.insert(0, "21")
 
         ttk.Label(dlg, text="Scale:").grid(row=4, column=0, sticky=tk.W, padx=10, pady=5)
-        cb_scale = ttk.Combobox(dlg, values=["logarithmic", "linear"], width=16, state="readonly")
+        cb_scale = ttk.Combobox(dlg, values=["logarithmic", "linear"], width=20, state="readonly")
         cb_scale.grid(row=4, column=1, padx=10, pady=5)
         cb_scale.set("logarithmic")
 
         ttk.Label(dlg, text="Precision:").grid(row=5, column=0, sticky=tk.W, padx=10, pady=5)
-        cb_prec = ttk.Combobox(dlg, values=self.PRECISION_PRESETS, width=16, state="normal")
+        cb_prec = ttk.Combobox(dlg, values=self.PRECISION_PRESETS, width=20, state="normal")
         cb_prec.grid(row=5, column=1, padx=10, pady=5)
         cb_prec.set("1 (medium - default)")
 
+        exc_choices = ["Current [App]", "Voltage [Vpp]"] if is_med else ["Current [A Peak]", "Voltage [V Peak]"]
         ttk.Label(dlg, text="Anregungsart:").grid(row=6, column=0, sticky=tk.W, padx=10, pady=5)
-        cb_exc = ttk.Combobox(dlg, values=["Current (Strom)", "Voltage (Spannung)"], width=16, state="readonly")
+        cb_exc = ttk.Combobox(dlg, values=exc_choices, width=20, state="readonly")
         cb_exc.grid(row=6, column=1, padx=10, pady=5)
-        cb_exc.set("Current (Strom)")
+        cb_exc.set(exc_choices[0])
 
-        ttk.Label(dlg, text="Amplitude (A / V):").grid(row=7, column=0, sticky=tk.W, padx=10, pady=5)
-        e_amp = ttk.Entry(dlg, width=18)
+        amp_lbl_text = "Amplitude [App / Vpp]:" if is_med else "Amplitude [A / V Peak]:"
+        ttk.Label(dlg, text=amp_lbl_text).grid(row=7, column=0, sticky=tk.W, padx=10, pady=5)
+        e_amp = ttk.Entry(dlg, width=22)
         e_amp.grid(row=7, column=1, padx=10, pady=5)
         e_amp.insert(0, "0.0001")
 
@@ -505,71 +690,67 @@ live_plot_mode = point
                 st = int(e_steps.get().strip())
                 sc = cb_scale.get()
                 pr = parse_precision_input(cb_prec.get())
-                exc = "Current" if "Current" in cb_exc.get() else "Voltage"
-                amp = float(e_amp.get().strip())
+                is_v = "Voltage" in cb_exc.get()
+                exc = ("Voltage [Vpp]" if is_med else "Voltage [V Peak]") if is_v else ("Current [App]" if is_med else "Current [A Peak]")
+                amp = parse_value_with_prefix(e_amp.get().strip())
                 self.block_tree.insert("", tk.END, values=(mn, mx, st, sc, pr, exc, amp))
                 dlg.destroy()
             except Exception as ex:
-                messagebox.showerror("Fehler", f"Ungültige Eingabe: {ex}", parent=dlg)
+                messagebox.showerror("Fehler", f"Ungueltige Eingabe: {ex}", parent=dlg)
 
-        ttk.Button(dlg, text="Hinzufügen", command=on_ok).grid(row=8, column=0, columnspan=2, pady=10)
+        ttk.Button(dlg, text="Hinzufuegen", command=on_ok).grid(row=8, column=0, columnspan=2, pady=12)
 
     def _edit_frequency_block(self) -> None:
         selected = self.block_tree.selection()
         if not selected:
-            messagebox.showwarning("Kein Block gewählt", "Bitte wähle einen Frequenzblock in der Tabelle aus.")
+            messagebox.showwarning("Kein Block gewaehlt", "Bitte waehle einen Frequenzblock in der Tabelle aus.")
             return
 
+        is_med = self._is_medical()
         item_id = selected[0]
         vals = self.block_tree.item(item_id, "values")
 
         dlg = tk.Toplevel(self.root)
         dlg.title("Frequenzblock bearbeiten")
-        dlg.geometry("380x420")
+        dlg.geometry("430x450")
         dlg.transient(self.root)
         dlg.grab_set()
 
-        lbl_hint = ttk.Label(
-            dlg,
-            text="💡 Tipp: Einheiten wie '100k' oder '1M'\nwerden automatisch umgerechnet.",
-            foreground="#0055aa",
-            justify=tk.LEFT,
-        )
-        lbl_hint.grid(row=0, column=0, columnspan=2, sticky=tk.W, padx=10, pady=5)
-
         ttk.Label(dlg, text="Min f [Hz]:").grid(row=1, column=0, sticky=tk.W, padx=10, pady=5)
-        e_min = ttk.Entry(dlg, width=18)
+        e_min = ttk.Entry(dlg, width=22)
         e_min.grid(row=1, column=1, padx=10, pady=5)
         e_min.insert(0, vals[0])
 
         ttk.Label(dlg, text="Max f [Hz]:").grid(row=2, column=0, sticky=tk.W, padx=10, pady=5)
-        e_max = ttk.Entry(dlg, width=18)
+        e_max = ttk.Entry(dlg, width=22)
         e_max.grid(row=2, column=1, padx=10, pady=5)
         e_max.insert(0, vals[1])
 
         ttk.Label(dlg, text="Steps (Punkte):").grid(row=3, column=0, sticky=tk.W, padx=10, pady=5)
-        e_steps = ttk.Entry(dlg, width=18)
+        e_steps = ttk.Entry(dlg, width=22)
         e_steps.grid(row=3, column=1, padx=10, pady=5)
         e_steps.insert(0, vals[2])
 
         ttk.Label(dlg, text="Scale:").grid(row=4, column=0, sticky=tk.W, padx=10, pady=5)
-        cb_scale = ttk.Combobox(dlg, values=["logarithmic", "linear"], width=16, state="readonly")
+        cb_scale = ttk.Combobox(dlg, values=["logarithmic", "linear"], width=20, state="readonly")
         cb_scale.grid(row=4, column=1, padx=10, pady=5)
         cb_scale.set(vals[3])
 
         ttk.Label(dlg, text="Precision:").grid(row=5, column=0, sticky=tk.W, padx=10, pady=5)
-        cb_prec = ttk.Combobox(dlg, values=self.PRECISION_PRESETS, width=16, state="normal")
+        cb_prec = ttk.Combobox(dlg, values=self.PRECISION_PRESETS, width=20, state="normal")
         cb_prec.grid(row=5, column=1, padx=10, pady=5)
         cb_prec.set(self._format_precision_for_ui(float(vals[4])))
 
+        exc_choices = ["Current [App]", "Voltage [Vpp]"] if is_med else ["Current [A Peak]", "Voltage [V Peak]"]
         ttk.Label(dlg, text="Anregungsart:").grid(row=6, column=0, sticky=tk.W, padx=10, pady=5)
-        cb_exc = ttk.Combobox(dlg, values=["Current (Strom)", "Voltage (Spannung)"], width=16, state="readonly")
+        cb_exc = ttk.Combobox(dlg, values=exc_choices, width=20, state="readonly")
         cb_exc.grid(row=6, column=1, padx=10, pady=5)
-        default_exc = vals[5] if len(vals) > 5 else "Current (Strom)"
-        cb_exc.set(default_exc)
+        default_exc = vals[5] if len(vals) > 5 else exc_choices[0]
+        cb_exc.set(exc_choices[1] if "Voltage" in str(default_exc) else exc_choices[0])
 
-        ttk.Label(dlg, text="Amplitude (A / V):").grid(row=7, column=0, sticky=tk.W, padx=10, pady=5)
-        e_amp = ttk.Entry(dlg, width=18)
+        amp_lbl_text = "Amplitude [App / Vpp]:" if is_med else "Amplitude [A / V Peak]:"
+        ttk.Label(dlg, text=amp_lbl_text).grid(row=7, column=0, sticky=tk.W, padx=10, pady=5)
+        e_amp = ttk.Entry(dlg, width=22)
         e_amp.grid(row=7, column=1, padx=10, pady=5)
         default_amp = vals[6] if len(vals) > 6 else "0.0001"
         e_amp.insert(0, default_amp)
@@ -581,30 +762,23 @@ live_plot_mode = point
                 st = int(e_steps.get().strip())
                 sc = cb_scale.get()
                 pr = parse_precision_input(cb_prec.get())
-                exc = "Current" if "Current" in cb_exc.get() else "Voltage"
-                amp = float(e_amp.get().strip())
+                is_v = "Voltage" in cb_exc.get()
+                exc = ("Voltage [Vpp]" if is_med else "Voltage [V Peak]") if is_v else ("Current [App]" if is_med else "Current [A Peak]")
+                amp = parse_value_with_prefix(e_amp.get().strip())
                 self.block_tree.item(item_id, values=(mn, mx, st, sc, pr, exc, amp))
                 dlg.destroy()
             except Exception as ex:
-                messagebox.showerror("Fehler", f"Ungültige Eingabe: {ex}", parent=dlg)
+                messagebox.showerror("Fehler", f"Ungueltige Eingabe: {ex}", parent=dlg)
 
-        ttk.Button(dlg, text="Speichern", command=on_ok).grid(row=8, column=0, columnspan=2, pady=10)
+        ttk.Button(dlg, text="Speichern", command=on_ok).grid(row=8, column=0, columnspan=2, pady=12)
 
     def _delete_frequency_block(self) -> None:
         selected = self.block_tree.selection()
         if not selected:
-            messagebox.showwarning("Kein Block gewählt", "Bitte wähle einen Frequenzblock in der Tabelle aus.")
+            messagebox.showwarning("Kein Block gewaehlt", "Bitte waehle einen Frequenzblock in der Tabelle aus.")
             return
         for item_id in selected:
             self.block_tree.delete(item_id)
-
-    def _on_interface_change(self, event) -> None:
-        if self.interface_var.get() == "TCP":
-            self.com_subframe.grid_remove()
-            self.tcp_subframe.grid(row=0, column=2, columnspan=5, sticky=tk.W, padx=10)
-        else:
-            self.tcp_subframe.grid_remove()
-            self.com_subframe.grid(row=0, column=2, columnspan=5, sticky=tk.W, padx=10)
 
     def _on_mode_change(self, event) -> None:
         if "MUX32" in self.mode_selector_var.get():
@@ -615,10 +789,7 @@ live_plot_mode = point
             self.frame_main.pack(fill=tk.BOTH, expand=True)
 
     def _on_excitation_change(self, event) -> None:
-        exc_code = int(self.exc_type_var.get().split()[0])
-        if exc_code == 2 and self.curr_range_var.get().startswith("0"):
-            self.curr_range_var.set("2 (±100uA / 10kΩ)")
-            self._log("[HINWEIS] Autoranging (0) ist bei Stromanregung nicht erlaubt -> Umgestellt auf Range 2 (±100µA).")
+        self._update_device_specific_labels()
 
     def refresh_profile_list(self) -> None:
         try:
@@ -643,23 +814,24 @@ live_plot_mode = point
                 self._log(f"[OK] Profil gewechselt zu: {sel}.ini")
 
     def load_ini_to_form(self) -> None:
+        """Laedt bestehende Werte aus der INI-Datei in alle Eingabefelder."""
         try:
             ini = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
             ini.read(self.config_path, encoding="utf-8")
 
-            self.interface_var.set(ini.get("Connection", "interface_type", fallback="COM"))
+            dev_ver = ini.get("Connection", "device_version", fallback="standard").strip().lower()
+            is_med = "medical" in dev_ver
+            self.device_version_var.set(self.DEVICE_VERSIONS[1] if is_med else self.DEVICE_VERSIONS[0])
+
             self.port_var.set(ini.get("Connection", "port", fallback="COM12"))
             self.baud_var.set(str(ini.getint("Connection", "baudrate", fallback=115200)))
-            self.ip_var.set(ini.get("Connection", "ip_address", fallback="192.168.1.100"))
-            self.tcp_port_var.set(str(ini.getint("Connection", "tcp_port", fallback=5000)))
-            self.watchdog_var.set(str(ini.getint("Connection", "tcp_watchdog_interval_s", fallback=60)))
 
             mux_enabled = ini.getboolean("MUX", "enabled", fallback=False)
             self.mode_selector_var.set("MUX32 Multiplexer (Zusatzkarte)" if mux_enabled else "Main Port (Front-BNC)")
             self.mux_sensors_var.set(ini.get("MUX", "active_sensors", fallback="1-8"))
             self.mux_mode_var.set(str(ini.getint("MUX", "mode", fallback=4)))
             m_chan = ini.getint("MUX", "channel", fallback=2)
-            self.mux_chan_var.set("3 (InternalMux / EXT2)" if m_chan == 3 else "2 (ExtPort)")
+            self.mux_chan_var.set("3 (int. Mux32 / InternalMux)" if m_chan == 3 else "2 (ext. Mux32 / ExtPort)")
             self.mux_delay_var.set(str(ini.getfloat("MUX", "switch_delay_s", fallback=0.10)))
 
             fe_mode = ini.getint("Frontend", "measurement_mode", fallback=2)
@@ -670,23 +842,17 @@ live_plot_mode = point
             }
             self.main_bnc_mode_var.set(fe_mode_map.get(fe_mode, "2 (4-Leiter Kelvin / 4-Point)"))
 
-            cr_val = ini.getint("Frontend", "current_range", fallback=2)
-            cr_map = {
-                0: "0 (Autoranging - nur bei Voltage!)",
-                1: "1 (±10mA / 100Ω)",
-                2: "2 (±100uA / 10kΩ)",
-                4: "4 (±1uA / 1MΩ)",
-                6: "6 (±10nA / 100MΩ)",
-            }
-            self.curr_range_var.set(cr_map.get(cr_val, f"{cr_val}"))
+            cr_val = str(ini.getint("Frontend", "current_range", fallback=2))
+            cr_list = self.CR_VALUES_MEDICAL if is_med else self.CR_VALUES_STANDARD
+            cr_map = {c.split()[0]: c for c in cr_list}
+            self.curr_range_var.set(cr_map.get(cr_val, cr_list[2]))
 
-            vr_val = ini.getint("Frontend", "voltage_range", fallback=1)
-            vr_map = {
-                0: "0 (Autoranging)",
-                1: "1 (±1.0V Default)",
-                2: "2 (±0.09V High Gain)",
-            }
-            self.volt_range_var.set(vr_map.get(vr_val, "1 (±1.0V Default)"))
+            vr_val = str(ini.getint("Frontend", "voltage_range", fallback=1))
+            if vr_val not in ("1", "2"):
+                vr_val = "1"
+            vr_list = self.VR_VALUES_MEDICAL if is_med else self.VR_VALUES_STANDARD
+            vr_map = {v.split()[0]: v for v in vr_list}
+            self.volt_range_var.set(vr_map.get(vr_val, vr_list[0]))
 
             for row in self.block_tree.get_children():
                 self.block_tree.delete(row)
@@ -708,9 +874,10 @@ live_plot_mode = point
                         st = ini.get("FrequencyBlocks", f"block_{idx}_steps", fallback="101")
                         sc = ini.get("FrequencyBlocks", f"block_{idx}_scale", fallback="logarithmic")
                         pr = ini.get("FrequencyBlocks", f"block_{idx}_precision", fallback="1.0")
-                        
+
                         exc_raw = ini.get("FrequencyBlocks", f"block_{idx}_exc_type", fallback="2")
-                        exc_str = "Voltage (Spannung)" if ("1" in exc_raw or "Volt" in exc_raw) else "Current (Strom)"
+                        is_v = "1" in exc_raw or "Volt" in exc_raw
+                        exc_str = ("Voltage [Vpp]" if is_med else "Voltage [V Peak]") if is_v else ("Current [App]" if is_med else "Current [A Peak]")
                         amp_val = ini.get("FrequencyBlocks", f"block_{idx}_amplitude", fallback="0.0001")
 
                         self.block_tree.insert("", tk.END, values=(mn, mx, st, sc, pr, exc_str, amp_val))
@@ -723,18 +890,18 @@ live_plot_mode = point
                 sc = ini.get("FrequencySetup", "scale", fallback="logarithmic")
                 pr = ini.get("FrequencySetup", "precision", fallback="1.0")
                 exc_t = ini.getint("FrequencySetup", "excitation_type", fallback=2)
-                exc_str = "Voltage (Spannung)" if exc_t == 1 else "Current (Strom)"
+                exc_str = ("Voltage [Vpp]" if is_med else "Voltage [V Peak]") if exc_t == 1 else ("Current [App]" if is_med else "Current [A Peak]")
                 amp_val = ini.get("FrequencySetup", "amplitude", fallback="0.0001")
                 self.block_tree.insert("", tk.END, values=(mn, mx, st, sc, pr, exc_str, amp_val))
 
             exc_t = ini.getint("FrequencySetup", "excitation_type", fallback=2)
-            self.exc_type_var.set("1 (Voltage / Spannung in V)" if exc_t == 1 else "2 (Current / Strom in A)")
+            exc_list = self.EXC_VALUES_MEDICAL if is_med else self.EXC_VALUES_STANDARD
+            self.exc_type_var.set(exc_list[0] if exc_t == 1 else exc_list[1])
+
             self.amp_var.set(ini.get("FrequencySetup", "amplitude", fallback="0.0001"))
             self.delay_var.set(ini.get("FrequencySetup", "point_delay_ms", fallback="20.0"))
             self.phase_sync_var.set(ini.getboolean("FrequencySetup", "phase_sync", fallback=False))
 
-            self.dc_bias_var.set(ini.getboolean("DCBias", "dc_bias_enabled", fallback=False))
-            self.bias_volt_var.set(ini.get("DCBias", "bias_voltage_v", fallback="0.0"))
             self.sync_time_var.set(str(ini.getint("SyncTime", "sync_time_us", fallback=0)))
 
             ts_m = ini.getint("Options", "timestamp_mode", fallback=0)
@@ -755,8 +922,8 @@ live_plot_mode = point
             else:
                 self.live_plot_mode_var.set("point (Nach jedem Frequenzpunkt)")
 
-            self._on_interface_change(None)
             self._on_mode_change(None)
+            self._update_device_specific_labels()
             self._log(f"[OK] Profil geladen: {os.path.basename(self.config_path)}")
         except Exception as e:
             messagebox.showerror("Fehler beim Laden", str(e))
@@ -764,17 +931,17 @@ live_plot_mode = point
     def save_named_profile(self) -> None:
         name = self.profile_name_var.get().strip()
         if not name:
-            messagebox.showwarning("Name fehlt", "Bitte gib einen gültigen Profilnamen ein.")
+            messagebox.showwarning("Name fehlt", "Bitte gib einen gueltigen Profilnamen ein.")
             return
         self.config_path = os.path.join(self.config_dir, f"{name}.ini")
         if self.save_current_form():
             self.refresh_profile_list()
             self.profiles_combo.set(name)
-            messagebox.showinfo("Gespeichert", f"Profil '{name}.ini' wurde vollständig gesichert.")
+            messagebox.showinfo("Gespeichert", f"Profil '{name}.ini' wurde vollstaendig gesichert.")
 
     def save_current_form(self) -> bool:
+        """Schreibt alle Formulareinstellungen zurueck in die INI-Datei."""
         try:
-            exc_type_int = int(self.exc_type_var.get().split()[0])
             curr_range_int = int(self.curr_range_var.get().split()[0])
 
             if not os.path.exists(self.config_path):
@@ -794,12 +961,14 @@ live_plot_mode = point
             if ini.has_section("Compensation"):
                 ini.remove_section("Compensation")
 
-            ini.set("Connection", "interface_type", self.interface_var.get())
+            for old_tcp_key in ["interface_type", "ip_address", "tcp_port", "tcp_watchdog_interval_s"]:
+                if ini.has_option("Connection", old_tcp_key):
+                    ini.remove_option("Connection", old_tcp_key)
+
+            dev_ver_str = "medical" if self._is_medical() else "standard"
+            ini.set("Connection", "device_version", dev_ver_str)
             ini.set("Connection", "port", self.port_var.get().strip())
             ini.set("Connection", "baudrate", self.baud_var.get().strip())
-            ini.set("Connection", "ip_address", self.ip_var.get().strip())
-            ini.set("Connection", "tcp_port", self.tcp_port_var.get().strip())
-            ini.set("Connection", "tcp_watchdog_interval_s", self.watchdog_var.get().strip())
 
             is_mux = "MUX32" in self.mode_selector_var.get()
             mux_ch_str = self.mux_chan_var.get().split()[0]
@@ -811,6 +980,8 @@ live_plot_mode = point
 
             fe_mode_str = self.main_bnc_mode_var.get().split()[0]
             vr_str = self.volt_range_var.get().split()[0]
+            if vr_str not in ("1", "2"):
+                vr_str = "1"
             ini.set("Frontend", "measurement_mode", fe_mode_str)
             ini.set("Frontend", "measurement_channel", mux_ch_str if is_mux else "1")
             ini.set("Frontend", "current_range", str(curr_range_int))
@@ -826,7 +997,8 @@ live_plot_mode = point
 
             children = self.block_tree.get_children()
             if not children:
-                self.block_tree.insert("", tk.END, values=("100.0", "10000000.0", "101", "logarithmic", "1.0", "Current (Strom)", "0.0001"))
+                default_exc_lbl = "Current [App]" if self._is_medical() else "Current [A Peak]"
+                self.block_tree.insert("", tk.END, values=("100.0", "10000000.0", "101", "logarithmic", "1.0", default_exc_lbl, "0.0001"))
                 children = self.block_tree.get_children()
 
             for idx, item_id in enumerate(children, start=1):
@@ -836,33 +1008,32 @@ live_plot_mode = point
                 ini.set("FrequencyBlocks", f"block_{idx}_steps", str(vals[2]))
                 ini.set("FrequencyBlocks", f"block_{idx}_scale", str(vals[3]))
                 ini.set("FrequencyBlocks", f"block_{idx}_precision", str(vals[4]))
-                
-                exc_str = str(vals[5]) if len(vals) > 5 else "Current (Strom)"
-                exc_code = "1" if ("Voltage" in exc_str or "1" in exc_str) else "2"
+
+                exc_str = str(vals[5]) if len(vals) > 5 else "Current"
+                exc_code = "1" if ("Voltage" in exc_str or str(exc_str).strip() == "1") else "2"
                 ini.set("FrequencyBlocks", f"block_{idx}_exc_type", exc_code)
 
-                amp_str = str(vals[6]) if len(vals) > 6 else "0.0001"
-                ini.set("FrequencyBlocks", f"block_{idx}_amplitude", amp_str)
+                amp_raw = vals[6] if len(vals) > 6 else "0.0001"
+                amp_parsed = str(parse_value_with_prefix(amp_raw))
+                ini.set("FrequencyBlocks", f"block_{idx}_amplitude", amp_parsed)
 
-            first_vals = self.block_tree.item(children[0], "values") if children else ("100.0", "10000000.0", "101", "logarithmic", "1.0", "Current (Strom)", "0.0001")
+            first_vals = self.block_tree.item(children[0], "values")
             ini.set("FrequencySetup", "mode", "sweep")
             ini.set("FrequencySetup", "start_frequency_hz", str(first_vals[0]))
             ini.set("FrequencySetup", "stop_frequency_hz", str(first_vals[1]))
             ini.set("FrequencySetup", "count", str(first_vals[2]))
             ini.set("FrequencySetup", "scale", str(first_vals[3]))
             ini.set("FrequencySetup", "precision", str(first_vals[4]))
-            
-            first_exc = str(first_vals[5]) if len(first_vals) > 5 else "Current (Strom)"
-            ini.set("FrequencySetup", "excitation_type", "1" if ("Voltage" in first_exc or "1" in first_exc) else "2")
-            
-            first_amp = str(first_vals[6]) if len(first_vals) > 6 else self.amp_var.get().strip()
-            ini.set("FrequencySetup", "amplitude", first_amp)
+
+            first_exc = str(first_vals[5]) if len(first_vals) > 5 else "Current"
+            ini.set("FrequencySetup", "excitation_type", "1" if ("Voltage" in first_exc or str(first_exc).strip() == "1") else "2")
+
+            first_amp_raw = first_vals[6] if len(first_vals) > 6 else self.amp_var.get().strip()
+            ini.set("FrequencySetup", "amplitude", str(parse_value_with_prefix(first_amp_raw)))
 
             ini.set("FrequencySetup", "point_delay_ms", self.delay_var.get().strip())
             ini.set("FrequencySetup", "phase_sync", str(self.phase_sync_var.get()))
 
-            ini.set("DCBias", "dc_bias_enabled", str(self.dc_bias_var.get()))
-            ini.set("DCBias", "bias_voltage_v", self.bias_volt_var.get().strip())
             ini.set("SyncTime", "sync_time_us", self.sync_time_var.get().strip())
 
             ts_str = self.ts_mode_var.get().split()[0]
@@ -885,7 +1056,54 @@ live_plot_mode = point
             messagebox.showerror("Fehler beim Speichern", str(e))
             return False
 
+    def run_selftest_action(self) -> None:
+        """Fuehrt die synchrone Baseline-Drift-Pruefung auf dem internen 2 kΩ Referenzpfad aus."""
+        port = self.port_var.get().strip() or "COM12"
+        try:
+            baudrate = int(self.baud_var.get().strip() or 115200)
+        except ValueError:
+            baudrate = 115200
+
+        self._log("\n" + "=" * 75)
+        self._log(f"[BASELINE-CHECK] Starte Stabilitaetspruefung an {port} (MUX-Port 3)...")
+        self._log("=" * 75)
+
+        tester = ISX3()
+        report = tester.run_baseline_drift_check(port=port, baudrate=baudrate, mux_channel=3, cycles=5, freq_hz=1000.0)
+
+        if report.get("error"):
+            err_msg = report["error"]
+            self._log(f"[BASELINE-FEHLER] {err_msg}")
+            messagebox.showerror("Baseline-Pruefung fehlgeschlagen", f"Fehler waehrend der Diagnose:\n{err_msg}", parent=self.root)
+            return
+
+        mean_z = report.get("mean_z", 0.0)
+        drift_pct = report.get("drift_pct", 0.0)
+        is_stable = report.get("stable", False)
+        readings = report.get("readings", [])
+
+        summary_lines = [f"Messwerte (5 Zyklen): {', '.join([f'{r:.2f} Ohm' for r in readings])}"]
+        line = f"Mittelwert: {mean_z:.2f} Ohm | Maximaler Drift: {drift_pct:.3f}% (Grenze: <= 0.2%)"
+        self._log(line)
+        summary_lines.append(line)
+
+        verdict_header = (
+            "GESAMTERGEBNIS: SYSTEM STABIL UND EINSATZBEREIT!\nDie Drift liegt im zulaessigen Toleranzbereich (<= 0.2%)."
+            if is_stable
+            else "GESAMTERGEBNIS: SYSTEM DRIFTET ZU STARK!\nDie Abweichung ueberschreitet 0.2% - bitte Geraet warmwerden lassen."
+        )
+        self._log("-" * 75)
+        self._log(verdict_header.replace("\n", " "))
+        self._log("=" * 75)
+
+        full_popup_text = f"{verdict_header}\n\n" + "\n\n".join(summary_lines)
+        if is_stable:
+            messagebox.showinfo("Baseline-Pruefung erfolgreich", full_popup_text, parent=self.root)
+        else:
+            messagebox.showwarning("Baseline-Pruefung: Instabilitaet erkannt", full_popup_text, parent=self.root)
+
     def start_measurement_action(self) -> None:
+        """Speichert die Konfiguration und startet die Messkampagne synchron."""
         if not self.save_current_form():
             return
         self._log(f"\n[INFO] Starte Messkampagne mit '{os.path.basename(self.config_path)}'...")
@@ -899,6 +1117,7 @@ live_plot_mode = point
 
 
 def run_gui():
+    """Startet die GUI."""
     root = tk.Tk()
     app = ConfigGUI(root)
     root.mainloop()

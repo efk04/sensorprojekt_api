@@ -1,5 +1,8 @@
 """
-config_handler.py - Konfigurationsparser, Validierer und Mess-Queue-Generator für das ISX-3.
+config_handler.py - Konfigurationsparser, Validierer und Mess-Queue-Generator fuer das ISX-3.
+
+Liest INI-Dateien ein, loest SI-Praefixe auf ('100u', '1M', '100k') und erstellt
+daraus die sequenzielle Abfolge von Frequenzmesspunkten.
 """
 
 import configparser
@@ -7,7 +10,38 @@ from dataclasses import asdict, dataclass
 import numpy as np
 
 
+def parse_value_with_prefix(val_str: str | float | int) -> float:
+    """
+    Parst Zeichenketten mit SI-Praefixen und physikalischen Einheiten
+    (z.B. '0.0001', '100u', '100uA', '1m', '100mVpp').
+    """
+    if isinstance(val_str, (int, float)):
+        return float(val_str)
+    s = str(val_str).strip()
+    for unit in ["app", "vpp", "ap", "vp", "hz", "v", "a", "s"]:
+        if s.lower().endswith(unit):
+            s = s[: -len(unit)].strip()
+            break
+    prefixes = {
+        "T": 1e12,
+        "G": 1e9,
+        "M": 1e6,
+        "k": 1e3,
+        "m": 1e-3,
+        "u": 1e-6,
+        "µ": 1e-6,
+        "n": 1e-9,
+        "p": 1e-12,
+    }
+    if s and s[-1] in prefixes:
+        mult = prefixes[s[-1]]
+        s = s[:-1].strip()
+        return float(s.replace(",", ".")) * mult
+    return float(s.replace(",", "."))
+
+
 def parse_frequency_input(value_str: str | float | int) -> float:
+    """Konvertiert Frequenzeingaben mit 'k', 'm' oder 'hz' in reine Hertz-Gleitkommazahlen."""
     if isinstance(value_str, (int, float)):
         return float(value_str)
     value_str = str(value_str).strip().lower()
@@ -27,12 +61,13 @@ def parse_frequency_input(value_str: str | float | int) -> float:
             multiplier = 1e6
             value_str = value_str[:-1]
     try:
-        return float(value_str) * multiplier
+        return float(value_str.replace(",", ".")) * multiplier
     except ValueError:
         return 100.0
 
 
 def parse_precision_input(val: str | float | int) -> float:
+    """Wandelt Precision-Texte ('low', 'medium', 'high') oder Zahlenwerte in Float um."""
     if isinstance(val, (int, float)):
         return float(np.clip(float(val), 0.0, 10.0))
 
@@ -68,12 +103,9 @@ class ApiSettingsConfig:
 
 @dataclass
 class ConnectionConfig:
-    interface_type: str
+    device_version: str
     port: str
     baudrate: int
-    ip_address: str
-    tcp_port: int
-    tcp_watchdog_interval_s: int
 
 
 @dataclass
@@ -153,6 +185,8 @@ class DeviceConfig:
 
 
 class ConfigParser:
+    """Liest INI-Dateien mit Fallback-Werten ein."""
+
     def __init__(self, file_path: str):
         self.file_path = file_path
         self.parser = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
@@ -183,12 +217,9 @@ class ConfigParser:
     def _parse_connection(self) -> ConnectionConfig:
         sec = self._find_section("Connection")
         return ConnectionConfig(
-            interface_type=self.parser.get(sec, "interface_type", fallback="COM"),
-            port=self.parser.get(sec, "port", fallback="COM12"),
+            device_version=self.parser.get(sec, "device_version", fallback="standard").strip().lower(),
+            port=self.parser.get(sec, "port", fallback="COM12").strip(),
             baudrate=self.parser.getint(sec, "baudrate", fallback=115200),
-            ip_address=self.parser.get(sec, "ip_address", fallback="192.168.1.100"),
-            tcp_port=self.parser.getint(sec, "tcp_port", fallback=5000),
-            tcp_watchdog_interval_s=self.parser.getint(sec, "tcp_watchdog_interval_s", fallback=60),
         )
 
     def _parse_options(self) -> OptionsConfig:
@@ -200,11 +231,14 @@ class ConfigParser:
 
     def _parse_frontend(self) -> FrontendConfig:
         sec = self._find_section("Frontend")
+        vr = self.parser.getint(sec, "voltage_range", fallback=1)
+        if vr not in (1, 2):
+            vr = 1
         return FrontendConfig(
             measurement_mode=self.parser.getint(sec, "measurement_mode", fallback=2),
             measurement_channel=self.parser.getint(sec, "measurement_channel", fallback=1),
             current_range=self.parser.getint(sec, "current_range", fallback=2),
-            voltage_range=self.parser.getint(sec, "voltage_range", fallback=1),
+            voltage_range=vr,
         )
 
     def _parse_mux(self) -> MuxConfig:
@@ -236,6 +270,7 @@ class ConfigParser:
         delay_ms = self.parser.getfloat(sec, "point_delay_ms", fallback=20.0)
         delay_us = int(delay_ms * 1000.0)
         raw_prec = self.parser.get(sec, "precision", fallback="1.0")
+        raw_amp = self.parser.get(sec, "amplitude", fallback="0.0001")
 
         return FrequencySetupConfig(
             mode=self.parser.get(sec, "mode", fallback="sweep").strip().lower(),
@@ -246,7 +281,7 @@ class ConfigParser:
             count=self.parser.getint(sec, "count", fallback=101),
             scale=self.parser.get(sec, "scale", fallback="logarithmic").strip().lower(),
             excitation_type=self.parser.getint(sec, "excitation_type", fallback=2),
-            amplitude=self.parser.getfloat(sec, "amplitude", fallback=0.0001),
+            amplitude=parse_value_with_prefix(raw_amp),
             point_delay_ms=delay_ms,
             point_delay_us=delay_us,
             phase_sync=self.parser.getboolean(sec, "phase_sync", fallback=False),
@@ -268,13 +303,14 @@ class ConfigParser:
     def _parse_measurement(self) -> MeasurementConfig:
         sec = self._find_section("Measurement")
         return MeasurementConfig(
-            number_of_spectra=self.parser.getint(sec, "number_of_spectra", fallback=10),
+            number_of_spectra=self.parser.getint(sec, "number_of_spectra", fallback=1),
         )
 
     def parse_as_dict(self) -> dict:
         return asdict(self.parse())
 
     def parse_as_flat_dict(self, use_prefix: bool = False) -> dict:
+        """Wandelt verschachtelte Abschnitte in ein einfaches Dictionary um."""
         nested_dict = self.parse_as_dict()
         flat_dict = {}
         for section, values in nested_dict.items():
@@ -302,6 +338,8 @@ class ConfigParser:
 
 
 class ConfigBuilder:
+    """Erzeugt die Mess-Queue aus der Konfiguration."""
+
     def __init__(self, config_path: str = "config/config.ini"):
         self.parser = ConfigParser(config_path)
         self.measurement_setup_queue: list[dict] = []
@@ -317,7 +355,7 @@ class ConfigBuilder:
         return self.settings
 
     def parse_frequency_blocks(self) -> list[dict]:
-        """Liest mehrere Frequenzblöcke inklusive block-spezifischer Anregung aus der INI."""
+        """Liest Frequenzbloecke inklusive block-spezifischer Anregung aus der INI."""
         self.settings = self.get_settings_from_config()
         ini = self.parser.parser
         blocks = []
@@ -352,7 +390,7 @@ class ConfigBuilder:
                 exc_type = 1 if ("1" in block_exc_str or "Voltage" in block_exc_str) else 2
 
                 block_amp = ini.get(sec, f"block_{idx}_amplitude", fallback=str(global_amp))
-                amplitude = float(block_amp)
+                amplitude = parse_value_with_prefix(block_amp)
 
                 blocks.append({
                     "start_frequency_hz": start_f,
@@ -368,7 +406,6 @@ class ConfigBuilder:
                 })
             return blocks
 
-        # Fallback auf Standard-Einzelfrequenz / Standard-Sweep
         mode = str(self.settings.get("mode", "sweep")).strip().lower()
         if mode == "single":
             raw_freqs = self.settings.get("frequency_hz", [1000.0])
@@ -409,6 +446,7 @@ class ConfigBuilder:
         return blocks
 
     def generate_measurement_queue(self) -> list[dict]:
+        """Erstellt die sequenzielle Liste aller Frequenz-Setups fuer die Messung."""
         self.measurement_setup_queue = []
         self.settings = self.get_settings_from_config()
         blocks = self.parse_frequency_blocks()
@@ -416,6 +454,7 @@ class ConfigBuilder:
         mux_enabled = bool(self.settings.get("mux_enabled", False))
         mux_mode = int(self.settings.get("mux_mode", 4))
         mux_chan = int(self.settings.get("mux_channel", 2))
+        dev_ver = str(self.settings.get("device_version", "standard")).strip().lower()
 
         if mux_enabled:
             meas_mode = 2 if mux_mode == 4 else 1
@@ -444,6 +483,7 @@ class ConfigBuilder:
             for freq in freqs:
                 single_setup = {
                     "id": global_id,
+                    "device_version": dev_ver,
                     "timestamp_mode": int(self.settings.get("timestamp_mode", 0)),
                     "enable_current_range_output": int(bool(self.settings.get("enable_current_range_output", False))),
                     "measurement_mode": meas_mode,
@@ -468,7 +508,7 @@ class ConfigBuilder:
                     "phase_sync": block["phase_sync"],
                     "dc_bias_enabled": int(bool(self.settings.get("dc_bias_enabled", False))),
                     "bias_voltage_v": float(self.settings.get("bias_voltage_v", 0.0)),
-                    "number_of_spectra": int(self.settings.get("number_of_spectra", 10)),
+                    "number_of_spectra": int(self.settings.get("number_of_spectra", 1)),
                     "sync_time_us": int(self.settings.get("sync_time_us", 0)),
                 }
                 self.measurement_setup_queue.append(single_setup)
@@ -478,12 +518,13 @@ class ConfigBuilder:
 
 
 def select_config_file() -> str | None:
+    """Oeffnet einen Dateiauswahldialog fuer .ini-Dateien."""
     from tkinter import Tk, filedialog
     root = Tk()
     root.withdraw()
     root.attributes("-topmost", True)
     config_path = filedialog.askopenfilename(
-        title="Messkonfiguration (.ini) auswählen",
+        title="Messkonfiguration (.ini) auswaehlen",
         filetypes=[("INI-Dateien", "*.ini"), ("Alle Dateien", "*.*")],
     )
     root.destroy()
