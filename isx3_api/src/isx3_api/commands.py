@@ -13,6 +13,7 @@ import serial.tools.list_ports
 import numpy as np
 from shapely import buffer
 import time
+import h5py
 import os
 import sys
 
@@ -257,7 +258,7 @@ class ISX3:
         return results
 
 
-    def read_measurement_data(self, spectra, timeout, measurement_settings):
+    def read_measurement_data(self, spectra,timeout, measurement_settings):
         """
         Reads measurement data frames from the ISX3 device.
 
@@ -286,8 +287,8 @@ class ISX3:
         current_range = 0
         timestamp_ms = 0
         timestamp_us = 0
-
-        results = {"id": [],
+        
+        results = {"current_id": [],
                    "real": [],
                    "imag": [],
                    "timestamp":[],
@@ -296,7 +297,7 @@ class ISX3:
                    "frequencies": []
         }
 
-        while len(results["id"]) < spectra:
+        while len(results["real"]) < spectra:
             tag = self.device.read(1)
             while tag and tag[0] != 0xB8:
                 tag = self.device.read(1)
@@ -348,7 +349,7 @@ class ISX3:
                 )
 
             #write results      
-            results["id"].append(freq_id),
+            #results["id"].append(freq_id),
             results["real"].append(real),
             results["imag"].append(imag),
                     
@@ -570,3 +571,48 @@ class ISX3:
                                                 amplitude)
         
         self._send_command(cmd_tag, payload + eops) # [cite: 2]  
+    """
+    def read_saved_data(self):
+        #temp function to simulate a measurement for testing the live plot
+        saved_data = {
+            "current_id": [],
+            "real": [],
+            "imag": [],
+            "timestamp": [],
+            "frequencies": []
+        }
+
+        # Mapping -> maps the names of data in with the dict: "saved_data"
+        h5_mapping = {
+            "current_id": "frequency_id",         #
+            "real": "real_part",          #[cite: 1]
+            "imag": "imaginary_part",     #[cite: 1]
+            "timestamp": "timestamp",     #[cite: 1]
+            "frequencies": "frequency",   #[cite: 1]
+            
+
+        }
+        #empty dict
+        saved_results = {}
+        file_path = ""
+       
+        # Datei sicher im Lesemodus öffnen
+        with h5py.File(file_path, 'r') as f:
+            group_path = f"Measurement_{}"
+            
+            if group_path in f:
+                group = f[group_path]
+                
+                for target_key, h5_name in h5_mapping.items():
+                    if h5_name in group:
+                        # Daten einlesen und in Python-Listen konvertieren
+                        test_results[target_key] = group[h5_name][()].tolist()
+                    else:
+
+                        print(f"Hinweis: Datensatz '{h5_name}' existiert nicht in der Gruppe.")
+            
+                
+        
+        time.sleep(0.5)
+        return test_results, 1
+    """
