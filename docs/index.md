@@ -31,6 +31,7 @@ Measurement().measurement("config.ini")
 
 installation
 quickstart
+example
 ```
 
 ```{toctree}
