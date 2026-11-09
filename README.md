@@ -1,80 +1,88 @@
-# Sensorprojekt - ScioSpec ISX-3 API
+# Sensorprojekt – Sciospec ISX-3 Python API & Mess-Framework
 
 ## 1. Projektziel
-Ziel ist eine lokal laufende, minimalistische Python-Anwendung/API zur Steuerung und Datenerfassung eines ScioSpec ISX-3 Messgeräts im universitären Laborbetrieb.
+Ziel ist eine lokal laufende, modulare Python-Anwendung und API (`isx3_api`) zur Steuerung, Systemdiagnose und automatisierten Datenerfassung von Sciospec ISX-3 Impedanzspektrometern (**Standard ISX-3 / ISX-3mini** sowie **Medical Research ISX-3**) im universitären Laborbetrieb[cite: 9, 10, 11, 15].
 
-Die Software soll es Studierenden ermöglichen:
-* das Messgerät über USB/serielle Schnittstelle anzusprechen,
-* Messeinstellungen vorzunehmen,
-* Messreihen zu starten und zu stoppen,
-* Messdaten in Echtzeit zu visualisieren,
-* Messergebnisse strukturiert im HDF5-Format zu speichern.
+Die Software ermöglicht es Studierenden und Forschenden:
+- beide Gerätegenerationen (Standard & Medical Research) über die serielle USB-Schnittstelle (Virtual COM Port) anzusprechen[cite: 11, 15],
+- komplexe Messeinstellungen (inkl. Multi-Block-Frequenzsweeps und Multiplexer-Routing) über `.ini`-Profile, einen interaktiven Konsolen-Assistenten (CLI) oder eine grafische Oberfläche (Tkinter-GUI) vorzunehmen[cite: 11, 12, 13, 15],
+- vor Messbeginn einen automatisierten **System-Baseline-Drift-Check** am internen $2\,\text{k}\Omega$-Referenzwiderstand durchzuführen[cite: 10, 11],
+- Einzelpunkt-, Hardware-Sweep- und Mehrkanal-MUX-Messreihen kontrolliert zu starten und zu stoppen[cite: 10, 13],
+- Messdaten in Echtzeit (punkt- oder sweepweise) in verschiedenen elektrochemischen Diagrammen zu visualisieren[cite: 11, 13, 14, 15],
+- Messergebnisse samt kompletter Konfigurations-Metadaten reproduzierbar im **HDF5-Format** zu speichern[cite: 1, 13].
 
-Die Anwendung soll stand-alone, einfach bedienbar, plattformübergreifend auf Windows und Linux lauffähig und leicht erweiterbar sein.
+Die Anwendung ist stand-alone, plattformübergreifend unter Windows und Linux lauffähig, kommt mit minimalen Standard-Abhängigkeiten aus und ist durch automatisierte Unit-Tests (ohne Hardware-Zwang via Mocking) abgesichert[cite: 1].
 
-## 2. Zeitplan
+## 2. Projektstatus & Meilensteine
+- **Basis-Architektur & Treiber (`commands.py`):** Vollständige Kapselung des Binärprotokolls (`0xB0` bis `0xB9`, `0x97`, `0xA1`) mit synchronem ACK/NACK-Handshake (`0x18`)[cite: 1, 10].
+- **Dual-Hardware-Support:** Unterstützung für das klassische 4-Byte-Frontend (`0xB0` + `0xB2`) bei Standard-Geräten sowie das erweiterte 15-Byte-Frontend-Protokoll (`0xB0` mit 16-Bit-Kanaladressierung ohne `0xB2`) beim Medical Research ISX-3[cite: 10, 15].
+- **Gutachten-Revision & Bugfixes:** Vollständige Behebung aller im Gutachten identifizierten Altmängel (aktive HDF5-Speicherung, bytegenaues Frame-Parsing für 4-Byte-ms- und 5-Byte-$\mu\text{s}$-Zeitstempel sowie Current-Range-Byte, echter Hex-Software-Reset `0xA1 0x00 0xA1`, Bereinigung von Fremdimporten)[cite: 1, 10, 13].
+- **Qualitätssicherung:** Implementierung einer Mock-basierten Unit-Test-Suite (`tests/test_isx3_api.py`) für Konfigurations-Parser, MUX-Logik, Binärprotokoll und HDF5-Persistenz.
 
-## 3. Funktionale Anforderungen
+## 3. Funktionale Anforderungen (Aktueller Umsetzungsstand)
 
-### Geräteverbindung
-* Die Anwendung soll erkennen können, ob ein verbundenes Gerät erreichbar ist.
-* Die Anwendung soll automatisch eine serielle Verbindung zum ISX-3 über USB herstellen können.
-* Bei Verbindungsabbruch soll eine klare Fehlermeldung ausgegeben werden.
+### Geräteverbindung & Hardware-Abstraktion
+- **Automatische Port-Erkennung:** Die Anwendung erkennt über `serial.tools.list_ports` alle verfügbaren seriellen Schnittstellen unter Windows (`COMx`) und Linux (`/dev/ttyUSBx`, `/dev/ttyACMx`) und stellt bei Bedarf Fallback-Ports bereit[cite: 1, 10, 11, 15].
+- **Verbindungsaufbau:** Aufbau der USB-FS-Verbindung (`connect_device_fs`) mit konfigurierbarer Baudrate (Standard: `115200` Baud) und automatischem Puffer-Reset[cite: 10, 11, 15].
+- **Modell-Umschaltung:** Nahtlose Unterstützung von `standard` (ISX-3 / ISX-3mini) und `medical` (Medical Research ISX-3) über den Konfigurationsparameter `device_version`[cite: 10, 11, 12, 15].
+- **Fehlerbehandlung:** Klare Prüfung auf Port-Verfügbarkeit, Verbindungsabbrüche und unvollständige Datenframes mit gezielten `TimeoutError`- und `ConnectionError`-Ausgaben[cite: 10].
 
-### Gerätesteuerung und Statusabfrage
-* Die Einstellungen für das Gerät sollen über eine config-Datei vorgenommen werden
-* Die Einstellungen aus der Config sollen nach der Anpassung der config oder vor jeder messung an das Gerät übertragen werden
-* Der aktuelle Gerätestatus soll abgefragt werden können, z. B. bereit, misst, Fehler.
-* Fehlermeldungen vom ISX-3 sollen in Menschenleserbarer Art angezeigt werden
+### Gerätesteuerung, Multiplexer-Routing & Diagnose
+- **Synchrones Befehls-Framing:** Jeder Befehl wird im Format `[Tag] [Länge] [Payload] [Tag]` gesendet und wartet auf die Hardware-Quittierung (`0x18 0x01 0x83 0x18`)[cite: 10].
+- **Klartext-Statusmeldungen:** Hardware-Antwortcodes (`MSG_DICT`, z. B. `0x81` Syntaxfehler, `0x82` unbekanntes Tag, `0x90` Überstrom, `0x91` Überspannung) werden in menschenlesbare deutsche Meldungen übersetzt[cite: 10].
+- **Universelles MUX32/64-Pin-Routing (`route_mux_sensor`):**
+  - Automatische Kanalberechnung für **4-Leiter-Messungen** ($4n-3$ bis $4n$, z. B. Sensor 1 $\rightarrow$ Pins `1, 2, 3, 4`; Sensor 2 $\rightarrow$ Pins `5, 6, 7, 8`) und **2-Leiter-Messungen** ($2n-1$ und $2n$) für beide Geräteversionen[cite: 10].
+  - Unterstützung für Kanalbereiche (`1-8`), Komma-Listen (`1, 3, 5`) sowie freie **Custom-Pin-Belegungen über Doppelpunkt-Syntax** (z. B. `1: 2,5,8,6` oder `22: 22,22,23,23`) via Regex-Parser[cite: 10, 11, 13, 15].
+  - Automatischer Relais-Stack-Reset (`0xB0 0x03 FF FF FF 0xB0`) vor jedem Kanalwechsel und beim Beenden der Messung (`clear_mux_routing`)[cite: 10, 13].
+- **Firmware-Schutz für Medical-Geräte:** Optionale Frame-Erweiterungen (`0x97`) und nicht unterstützte Befehle werden im Medical-Modus abgefangen, um ACK-Timeouts zu verhindern[cite: 10].
+- **System-Baseline-Drift-Check (`run_baseline_drift_check`):** Automatisierte Stabilitätsprüfung über 5 Messzyklen bei $1\,\text{kHz}$ auf dem internen $2\,\text{k}\Omega$-Präzisionswiderstand (MUX-Port 3, Pins `22, 22, 23, 23`) mit Berechnung von Mittelwert und relativer Drift (Toleranzgrenze $\le 0{,}2\,\%$)[cite: 10, 11].
 
-### Messeinstellungen / Messparameter
-* Messparameter sollen vor der Messung in Mess-Config-File vorgenommen werden
-* Die Anwendung soll nur gültige Parameterwerte akzeptieren und ungültige Eingaben mit defaults ersetzen und warnungen an den user geben
-* Es soll möglich sein, Messparameter als Konfiguration zu speichern.
-* Es soll möglich sein, gespeicherte Messprofile zu laden.
-* Die aktuell gesetzten Parameter sollen vor Messstart angezeigt werden.
+### Messeinstellungen & Messparameter (`config_handler.py`)
+- **Strukturierte `.ini`-Konfiguration:** Verwaltung über 11 standardisierte Sektionen (`Connection`, `MUX`, `Frontend`, `ExtensionPort`, `FrequencySetup`, `FrequencyBlocks`, `DCBias`, `SyncTime`, `Options`, `Measurement`, `ApiSettings`) mittels typisierter Python-`dataclass`-Strukturen[cite: 1, 11, 12, 15].
+- **Intelligentes Einheiten- & SI-Präfix-Parsing:** Eingaben wie `100u`, `100uA`, `100mVpp`, `1.5k` oder `1M` werden automatisch in Gleitkommazahlen konvertiert[cite: 11, 12, 15].
+- **Automatische Amplituden-Skalierung ($A_{pp}$ vs. $A_p$):**
+  - Im **Standard-Modus** werden Amplituden als echte Spitzenwerte ($A_p$ / $V_p$) eingegeben und 1:1 an die Hardware übertragen[cite: 10, 11, 15].
+  - Im **Medical-Modus** erfolgt die Eingabe analog zur Sciospec-PC-Software als Spitze-Spitze-Wert ($A_{pp}$ / $V_{pp}$)[cite: 11, 15]. Die API halbiert diesen Wert vor dem Packen in den `0xB6`-Befehl automatisch (`* 0.5`), um die Peak-Vorgabe der Firmware zu erfüllen[cite: 10, 11, 15].
+- **Multi-Block-Frequenzsweeps:** Unterstützung beliebig vieler verketteter Frequenzblöcke mit jeweils eigener Start-/Stoppfrequenz, Punktanzahl, Skalierung (`logarithmic` / `linear`), `precision`, Anregungsart (`Voltage` / `Current`) und Amplitude[cite: 10, 11, 12, 15].
+- **Parameter-Validierung & Fallbacks:** Ungültige Eingaben (z. B. nicht unterstützte `voltage_range`- oder `current_range`-Codes) werden automatisch auf sichere Hardware-Defaults korrigiert und mit einer Warnung protokolliert[cite: 10, 11, 12, 13].
 
-### Messung
-* Eine Messreihe soll gestartet werden können.
-* Eine laufende Messreihe soll gestoppt werden können.
-* Eine Messreihe soll kontrolliert beendet werden können, sodass bereits empfangene Daten erhalten bleiben.
-* Die Anwendung soll während einer Messung Messdaten kontinuierlich oder in Blöcken empfangen können.
-* Empfangene Messdaten sollen mit Zeitstempeln versehen werden.
-* Die Messung soll auch bei längeren Messreihen stabil laufen, ohne dass Daten verloren gehen.
+### Messung (`measurement.py`)
+- **Zwei Ausführungsmodi:**
+  - **Hardware-Sweep (`0xB6` Sub `0x03`):** Übertragung kompletter Frequenzblöcke in den Gerätespeicher und Einlesen des gesamten Spektrums in einem schnellen Block-Transfer[cite: 10, 13].
+  - **Single-Step-Modus (`0xB6` Sub `0x02`):** Diskrete Punkt-für-Punkt-Konfiguration und Messung[cite: 10, 13].
+- **Mehrkanal-Sequenzierung:** Automatisches Durchschalten aller aktiven MUX-Sensoren inklusive konfigurierbarer Einschwingzeit (`switch_delay_s` und `point_delay_ms`)[cite: 10, 11, 12, 13, 15].
+- **Erweiterte Datenframe-Auswertung (`read_measurement_data`):** Dynamisches Byte-Parsing für Realteil, Imaginärteil, Frequenz-ID sowie optionale 4-Byte-ms-Zeitstempel, 5-Byte-$\mu\text{s}$-Zeitstempel und den aktiven Strommessbereich (`current_range`)[cite: 10, 13].
+- **Kontrollierter Abbruch:** Sauberes Abfangen von `KeyboardInterrupt` (`Strg+C`) in einem `try...finally`-Block[cite: 10, 13]; bereits gemessene Punkte bleiben in der HDF5-Datei erhalten, das MUX-Routing wird zurückgesetzt und der serielle Port sicher geschlossen[cite: 13].
 
-### Echtzeitvisualisierung
-* Die Anwendung soll eingehende Messdaten während der Messung live darstellen können.
-* Der Live-Plot soll deaktivierbar sein, um Ressourcen zu sparen oder Messungen ohne Visualisierung durchzuführen.
-* Es soll möglich sein, mindestens eine relevante Darstellung auszuwählen, z. B. Impedanz über Frequenz, Nyquist-Plot, Bode-Plot oder Zeitreihe.
-* Der Live-Plot soll in sinnvollen Intervallen aktualisiert werden.
-* Die Visualisierung darf die Datenerfassung nicht blockieren oder wesentlich verlangsamen.
-* Die geplotteten Daten sollen nach Möglichkeit aus denselben Daten stammen, die auch gespeichert werden.
+### Echtzeitvisualisierung (`plot_templates.py`)
+- **Vier Diagramm-Vorlagen:**
+  - `bode`: Klassisches Bode-Diagramm ($|Z|$ logarithmisch und Phase $\varphi$ in Grad über logarithmischer Frequenz)[cite: 11, 14, 15].
+  - `bode_lin`: Bode-Diagramm mit linearer Betragsachse[cite: 11, 13, 14, 15].
+  - `nyquist`: Ortskurve ($Z_{\mathrm{imag}}$ über $Z_{\mathrm{real}}$) mit quadratischer Achsenskalierung[cite: 11, 13, 14, 15].
+  - `impedance_frequency`: Getrennte Darstellung von $Z_{\mathrm{real}}$ und $Z_{\mathrm{imag}}$ über der Frequenz[cite: 11, 13, 14, 15].
+- **Sweep-Historie:** Vergangene Durchläufe (bis zu 5 Sweeps) werden als dezente graue Referenzkurven im Hintergrund mitgeführt[cite: 14].
+- **Ressourcen-Steuerung:** Der Live-Plot kann komplett deaktiviert (`live_plot_enabled = False`) oder zwischen Punkt-Update (`point`) und Komplett-Sweep-Update (`sweep`) umgeschaltet werden[cite: 11, 12, 13, 15].
 
-### Speicherung
-* Messergebnisse sollen im HDF5-Format gespeichert werden können.
-* Jede Messung soll in einer eigenen HDF5-Datei oder als eigene Gruppe innerhalb einer Datei gespeichert werden können.
-* Die Speicherung soll automatisch während oder unmittelbar nach der Messung erfolgen.
-* Metadaten zur Messung sollen mitgespeichert werden.
-* Die gespeicherten Daten sollen für Menschen und Software nachvollziehbar strukturiert sein.
-* Die Anwendung soll Dateinamen nach einem nachvollziehbaren Schema erzeugen können, z. B. Zeitstempel + Messname.
-* Der Speicherpfad soll konfigurierbar sein.
-* Bei einem Abbruch der Messung sollen bereits empfangene Daten möglichst gespeichert bleiben.
+### Speicherung im HDF5-Format
+- **Automatische Dateierzeugung:** Jede Messkampagne erzeugt im Ordner `measurements/` eine Datei nach dem Schema `measurement_<MAIN|MUX>_<YYYYMMDD-HHMMSS>.h5`[cite: 13].
+- **Vollständige Reproduzierbarkeit:** Die gesamte `.ini`-Konfiguration sowie `device_version` und `measurement_type` werden vor Messbeginn in der HDF5-Gruppe `Configuration` als Attribute gesichert[cite: 1, 13].
+- **Hierarchische Datenablage:**
+  - Am Hauptport unter `/Measurement_<Zyklus>.<PunktID>`[cite: 1, 13].
+  - Im MUX-Betrieb getrennt nach Kanälen unter `/Sensor_<Nr>/Measurement_<Zyklus>.<PunktID>` inklusive realer Kanal-Messdauer (`measurement_duration_ms`)[cite: 13].
+  - Gespeicherte Datasets pro Messpunkt: `frequency`, `frequency_id`, `real_part`, `imaginary_part`, `timestamp` sowie optional `hw_timestamp` (inkl. Einheiten-Attribut `ms`/`us`) und `current_range`[cite: 11, 13, 15].
 
-### Oberfläche
-* Die Anwendung soll als Python-Anwendung ohne zwingende grafische Oberfläche nutzbar sein.
-* Die Anwendung soll über eine Kommandozeilenschnittstelle oder eine einfache TUI bedienbar sein.
-* Die wichtigsten Aktionen sollen über klare Befehle erreichbar sein, z. B. verbinden, konfigurieren, starten, stoppen, speichern.
-* Die Anwendung soll Hilfetexte und Nutzungshinweise anzeigen können.
-* Fehler sollen verständlich und nachvollziehbar ausgegeben werden.
+### Oberfläche & Bedienkonzept (`main.py` & `config_gui.py`)
+Über den zentralen Einstiegspunkt `tests/main.py` stehen drei gleichwertige Arbeitsweisen zur Verfügung[cite: 15]:
+1. **Grafische Benutzeroberfläche (Tkinter-GUI):** Komfortabler Profil-Manager mit dynamischer Einheiten-Umschaltung ($A$/$V$ Peak vs. $A_{pp}$/$V_{pp}$), interaktiver Frequenzblock-Tabelle, MUX-Pin-Hilfe, integriertem Baseline-Drift-Check und Live-Log-Konsole[cite: 11, 15].
+2. **Direktes Laden einer `.ini`-Datei:** Schneller Start bestehender Messprofile über Pfadeingabe für automatisierte Serienmessungen[cite: 15].
+3. **Interaktiver Konsolen-Assistent (CLI):** Schrittweise Abfrage aller Parameter direkt im Terminal für Headless-Systeme (z. B. Raspberry Pi oder Linux-Laborrechner über SSH) ohne grafische Oberfläche[cite: 15].
 
-### Nicht-funktionale Anforderungen
-* Die Software soll in Python implementiert werden.
-* Die Software soll unter Windows und Linux lauffähig sein.
-* Die Software soll lokal ausgeführt werden.
-* Die Software soll minimalistisch und erweiterbar gestaltet sein.
-* Die Kernfunktionalität soll möglichst wenige externe Abhängigkeiten benötigen.
-* Die Architektur soll eine klare Trennung zwischen Gerätekommunikation, Messlogik, Speicherung und Darstellung vorsehen.
-* Die Anwendung soll so gestaltet sein, dass sie auch von Studierenden mit Grundkenntnissen in Python/Laborbetrieb nutzbar ist.
-* Die Software soll dokumentiert werden, mindestens mit README, Installationsanleitung und Nutzungsbeispielen.
-* Die Kernmodule sollen testbar gestaltet sein.
-* Die Anwendung soll ohne spezielle Installation als Python-Projekt in einer virtuellen Umgebung lauffähig sein.
+### Nicht-funktionale Anforderungen & Architektur
+- **Klare Schichtenarchitektur (`src/isx3_api/`):**
+  - `commands.py`: Hardware-Treiber, Binärprotokoll & Selbsttest[cite: 1, 10].
+  - `config_handler.py`: INI-Parser, Dataclasses, Einheiten-Konverter & Queue-Generator[cite: 1, 5, 12].
+  - `measurement.py`: Mess-Orchestrator, MUX-Parsing & HDF5-Datenpersistenz[cite: 1, 6, 13].
+  - `plot_templates.py`: Matplotlib-Visualisierungsvorlagen[cite: 1, 7, 14].
+  - `config_gui.py`: Grafische Tkinter-Oberfläche[cite: 4, 11].
+- **Minimale Abhängigkeiten:** Beschränkt auf `pyserial`, `numpy`, `matplotlib` und `h5py` (sowie Standardbibliotheken `tkinter`, `struct`, `configparser`, `unittest`)[cite: 1, 10, 11, 12, 13, 14, 15].
+- **Testbarkeit:** Vollständige Abdeckung der Kernlogik durch `tests/test_isx3_api.py` (13 Unit-Tests mit Hardware-Mocking).
