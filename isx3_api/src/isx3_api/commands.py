@@ -154,8 +154,14 @@ class ISX3:
                 status_text = MSG_DICT.get(status, f"Unbekannter Status-Code 0x{status:02X}")
                 raise ValueError(f"Unerwarteter Status empfangen: {status_text}")
 
-            # Asynchrone System-Nachrichten konsumieren und ignorieren
-            elif tag in (0x1D, self.CMD_GET_EXTENSION_MODULE, self.CMD_GET_FRONTEND, self.CMD_GET_EXTENSION_PORT):
+            # Asynchrone System-Nachrichten oder noch nachlaufende Messframes (0xB8) konsumieren
+            elif tag in (
+                0x1D,
+                self.CMD_MEASURE,
+                self.CMD_GET_EXTENSION_MODULE,
+                self.CMD_GET_FRONTEND,
+                self.CMD_GET_EXTENSION_PORT,
+            ):
                 len_b = self.device.read(1)
                 if not len_b:
                     continue
@@ -167,6 +173,26 @@ class ISX3:
                 continue
 
         raise TimeoutError(f"Timeout: Keine Bestaetigung (ACK) fuer Befehl 0x{original_cmd_tag:02X} erhalten.")
+
+    def stop_measurement(self) -> None:
+        """
+        Sendet den expliziten Stop-Befehl (0xB8 0x01 0x00 0xB8) an das ISX-3,
+        damit das Geraet garantiert den Messmodus verlaesst, und leert verbleibende Messframes.
+        """
+        if not self.device or not self.device.is_open:
+            return
+        try:
+            stop_frame = bytes([self.CMD_MEASURE, 0x01, 0x00, self.CMD_MEASURE])
+            self.device.write(stop_frame)
+            self.device.flush()
+            time.sleep(0.15)
+            # Alle eventuell noch nachlaufenden Bytes und das Stop-ACK aus dem Puffer leeren
+            while self.device.in_waiting > 0:
+                self.device.read(self.device.in_waiting)
+                time.sleep(0.05)
+            self.device.reset_input_buffer()
+        except Exception as e:
+            print(f"[HINWEIS] Fehler beim Stoppen der Messung: {e}")
 
     def software_reset(self) -> None:
         """Sendet den Software-Reset (Befehl 0xA1) an das ISX-3."""
@@ -186,7 +212,7 @@ class ISX3:
         """
         Konfiguriert optionale Frame-Erweiterungen (0x97) und Inter-Sweep Synchronisation.
         Beim Medical Research ISX-3 wird 0x97 uebersprungen bzw. per try-except geschuetzt,
-        um Timeouts bei inkompatibler Firmware zu verhindern.
+        um Timeouts oder NACK-Blockaden bei inkompatibler Firmware zu verhindern.
         """
         self.device_version = str(settings.get("device_version", self.device_version)).strip().lower()
         timestamp_mode = int(settings.get("timestamp_mode", 0))
@@ -194,6 +220,9 @@ class ISX3:
         dc_bias_enabled = bool(settings.get("dc_bias_enabled", False))
         bias_voltage_v = float(settings.get("bias_voltage_v", 0.0))
         sync_time_us = int(settings.get("sync_time_us", 0))
+
+        # Sicherstellen, dass das Geraet vor dem Options-Setup nicht mehr im Measure-Modus haengt
+        self.stop_measurement()
 
         if "medical" not in self.device_version or timestamp_mode > 0 or enable_current_range_output:
             try:
@@ -211,6 +240,10 @@ class ISX3:
                 print(f"[HINWEIS] Befehl 0x97 wird von dieser Firmware nicht bestaetigt (uebersprungen): {e}")
                 settings["timestamp_mode"] = 0
                 settings["enable_current_range_output"] = False
+                if self.device and self.device.is_open:
+                    time.sleep(0.1)
+                    self.device.reset_input_buffer()
+                    self.device.reset_output_buffer()
         else:
             print("[INFO] Medical-Modus: Ueberspringe inaktive 0x97-Optionen (verhindert ACK-Timeout).")
 
@@ -251,37 +284,55 @@ class ISX3:
         self,
         sensor_idx: int,
         wire_mode: int = 4,
-        custom_pins: tuple[int, int, int, int] | None = None,
+        custom_pins: tuple[int, int, int, int] | list[tuple[int, int, int, int]] | None = None,
         **kwargs: Any,
-    ) -> tuple[int, int, int, int]:
-        """Berechnet Pin-Kanalzuordnungen für MUX32/64 und schaltet das Routing um."""
+    ) -> tuple[int, int, int, int] | list[tuple[int, int, int, int]]:
+        """
+        Berechnet Pin-Kanalzuordnungen fuer MUX32/64 und schaltet das Routing um.
+        Unterstuetzt sowohl einzelne 4er-Pin-Tupel als auch Listen von Pin-Tupeln fuer
+        paralleles Zusammenschalten mehrerer Pins (z.B. '1: CE:1,5,9, RE:2,6,10, WS:3,7,11, WE:4,8,12').
+        """
         if custom_pins is not None:
-            # Wenn per Doppelpunkt (z.B. '1: 2,5,8,6') Custom-Pins übergeben wurden
-            ce, re, ws, we = custom_pins
+            if isinstance(custom_pins, list):
+                pin_tuples = [tuple(int(x) for x in t) for t in custom_pins]
+                self.active_mux_pins = pin_tuples if len(pin_tuples) > 1 else pin_tuples[0]
+                ce_s = ",".join(str(t[0]) for t in pin_tuples)
+                re_s = ",".join(str(t[1]) for t in pin_tuples)
+                ws_s = ",".join(str(t[2]) for t in pin_tuples)
+                we_s = ",".join(str(t[3]) for t in pin_tuples)
+                print(
+                    f"[MUX] Sensor #{sensor_idx} (Multi-Pin Custom) aktiviert -> "
+                    f"CE:[{ce_s}], RE:[{re_s}], WS:[{ws_s}], WE:[{we_s}]"
+                )
+                return self.active_mux_pins
+            else:
+                ce, re, ws, we = (int(x) for x in custom_pins)
         elif wire_mode == 4:
-            # Automatische 4-Leiter-Berechnung (4 Pins pro Sensor, unabhängig ob Standard oder Medical)
             ce = 4 * sensor_idx - 3
             re = 4 * sensor_idx - 2
             ws = 4 * sensor_idx - 1
             we = 4 * sensor_idx
         elif wire_mode == 2:
-            # Automatische 2-Leiter-Berechnung (2 Pins pro Sensor)
             ce = 2 * sensor_idx - 1
             re = ce
             we = 2 * sensor_idx
             ws = we
         else:
-            raise ValueError(f"Ungültiger wire_mode: {wire_mode}. Nur 2 oder 4 erlaubt.")
+            raise ValueError(f"Ungueltiger wire_mode: {wire_mode}. Nur 2 oder 4 erlaubt.")
 
         self.active_mux_pins = (ce, re, ws, we)
         print(f"[MUX] Sensor #{sensor_idx} ({wire_mode}-Leiter) aktiviert -> CE:{ce}, RE:{re}, WS:{ws}, WE:{we}")
         return ce, re, ws, we
 
     def clear_mux_routing(self) -> None:
-        """Setzt das aktive Multiplexer-Routing zurueck."""
+        """Stoppt eventuelle Restmessungen und setzt das aktive Multiplexer-Routing zurueck."""
         self.active_mux_pins = None
         if self.device and self.device.is_open:
-            self._send_command(self.CMD_SETUP_FRONTEND, bytes([0xFF, 0xFF, 0xFF]))
+            self.stop_measurement()
+            try:
+                self._send_command(self.CMD_SETUP_FRONTEND, bytes([0xFF, 0xFF, 0xFF]), timeout=1.5)
+            except Exception:
+                pass
 
     def _apply_frontend_and_routing(
         self,
@@ -293,8 +344,8 @@ class ISX3:
     ) -> None:
         """
         Konfiguriert das analoge Frontend ueber Befehl 0xB0.
-        Unterscheidet zwischen dem erweiterten 15-Byte-Protokoll (Medical)
-        und dem klassischen 4-Byte-Protokoll mit separatem 0xB2 (Standard).
+        Unterstuetzt bei Multi-Pin-Zuweisungen (Liste von Tupeln) das gestapelte Schalten
+        mehrerer Relais-Pfade ohne dazwischenliegendes Reset (FF FF FF).
         """
         if int(current_range) not in (0, 1, 2, 4, 6):
             print(f"[WARNUNG] Ungueltiger current_range={current_range}, setze auf 2 (±100 µA).")
@@ -303,35 +354,49 @@ class ISX3:
         if int(voltage_range) not in (1, 2):
             voltage_range = 1
 
-        # Altes Setup vor neuer Zuweisung leeren
+        # Altes Setup einmalig vor neuer Zuweisung komplett leeren
         self._send_command(self.CMD_SETUP_FRONTEND, bytes([0xFF, 0xFF, 0xFF]))
 
+        # Pin-Liste normalisieren (Einzeltupel -> Liste mit 1 Tupel, Liste -> Liste mit N Tupeln)
+        if self.active_mux_pins is not None:
+            if isinstance(self.active_mux_pins, list):
+                pin_tuples = self.active_mux_pins
+            else:
+                pin_tuples = [self.active_mux_pins]
+        else:
+            pin_tuples = []
+
         if "medical" in self.device_version:
-            # Medical-Modus: 15-Byte Struktur inklusive CE, RE, WS, WE direkt im 0xB0-Befehl
-            if self.active_mux_pins is not None:
+            header = struct.pack(">BBB", int(measurement_mode), int(current_range), int(voltage_range))
+
+            if pin_tuples:
                 chan_type = int(measurement_channel) if int(measurement_channel) in (2, 3) else 3
-                ce, re, ws, we = self.active_mux_pins
+                # Jedes Pin-Tupel nacheinander auf den internen Relais-Stack schalten
+                for ce, re, ws, we in pin_tuples:
+                    if measurement_mode == 1:
+                        ch_settings = struct.pack(">BHBH", chan_type, ce, chan_type, we)
+                    elif measurement_mode == 3:
+                        ch_settings = struct.pack(">BHBHBH", chan_type, ce, chan_type, re, chan_type, we)
+                    else:
+                        ch_settings = struct.pack(
+                            ">BHBHBHBH",
+                            chan_type, ce,
+                            chan_type, re,
+                            chan_type, ws,
+                            chan_type, we,
+                        )
+                    self._send_command(self.CMD_SETUP_FRONTEND, header + ch_settings)
             else:
                 chan_type = 1
                 ce = re = ws = we = 0
+                if measurement_mode == 1:
+                    ch_settings = struct.pack(">BHBH", chan_type, ce, chan_type, we)
+                elif measurement_mode == 3:
+                    ch_settings = struct.pack(">BHBHBH", chan_type, ce, chan_type, re, chan_type, we)
+                else:
+                    ch_settings = struct.pack(">BHBHBHBH", chan_type, ce, chan_type, re, chan_type, ws, chan_type, we)
+                self._send_command(self.CMD_SETUP_FRONTEND, header + ch_settings)
 
-            header = struct.pack(">BBB", int(measurement_mode), int(current_range), int(voltage_range))
-
-            if measurement_mode == 1:
-                ch_settings = struct.pack(">BHBH", chan_type, ce, chan_type, we)
-            elif measurement_mode == 3:
-                ch_settings = struct.pack(">BHBHBH", chan_type, ce, chan_type, re, chan_type, we)
-            else:
-                ch_settings = struct.pack(
-                    ">BHBHBHBH",
-                    chan_type, ce,
-                    chan_type, re,
-                    chan_type, ws,
-                    chan_type, we,
-                )
-
-            payload = header + ch_settings
-            self._send_command(self.CMD_SETUP_FRONTEND, payload)
             time.sleep(max(0.08, float(switch_delay)))
         else:
             # Standard-Modus: Kurzes 4-Byte Frontend + Routing ueber Befehl 0xB2
@@ -340,8 +405,9 @@ class ISX3:
             )
             self._send_command(self.CMD_SETUP_FRONTEND, fe_payload)
 
-            if self.active_mux_pins is not None:
-                self.set_extension_port(*self.active_mux_pins)
+            if pin_tuples:
+                for ce, re, ws, we in pin_tuples:
+                    self.set_extension_port(ce, re, ws, we)
                 time.sleep(max(0.08, float(switch_delay)))
             else:
                 time.sleep(0.02)
@@ -456,7 +522,7 @@ class ISX3:
     def start_measurement(
         self, spectra: int, id: int, measurement_settings: dict, expected_frames: int | None = None
     ) -> dict:
-        """Startet den Messlauf ueber Befehl 0xB8 und liest die empfangenen Frames ein."""
+        """Startet den Messlauf ueber Befehl 0xB8, liest die empfangenen Frames ein und beendet den Messmodus sauber."""
         if not self.device or not self.device.is_open:
             print("[FEHLER] Kein Geraet verbunden.")
             return {
@@ -476,9 +542,7 @@ class ISX3:
                     time.sleep(0.1)
             except KeyboardInterrupt:
                 pass
-            data_stop = bytes([0x00])
-            self.device.write(bytes([cmd_tag, len(data_stop)]) + data_stop + bytes([cmd_tag]))
-            self.device.flush()
+            self.stop_measurement()
             print("[INFO] Kontinuierliche Messung gestoppt.")
             return {
                 "id": [], "real": [], "imag": [], "timestamp": [],
@@ -495,11 +559,15 @@ class ISX3:
         per_frame_timeout = max(1.0, 0.8 * (1.0 + precision_val))
         timeout = max(20.0, float(total_frames) * per_frame_timeout)
 
-        return self.read_measurement_data(
-            spectra=total_frames,
-            timeout=timeout,
-            measurement_settings=measurement_settings,
-        )
+        try:
+            return self.read_measurement_data(
+                spectra=total_frames,
+                timeout=timeout,
+                measurement_settings=measurement_settings,
+            )
+        finally:
+            # Garantiert, dass das ISX-3 nach dem Auslesen (auch bei Multi-Pin-Stacks) den Measure-Modus verlaesst!
+            self.stop_measurement()
 
     def read_measurement_data(
         self, spectra: int, timeout: float, measurement_settings: dict

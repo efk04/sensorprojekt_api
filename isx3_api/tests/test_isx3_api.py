@@ -3,7 +3,7 @@ test_isx3_api.py - Automatisierte Unit-Tests fuer das Sciospec ISX-3 API-Framewo
 
 Testet ohne reale Hardware (mittels Mocking):
 1. SI-Praefix- und Konfigurations-Parsing (config_handler.py)
-2. MUX-Pin-Routing fuer 4-Leiter, 2-Leiter und Custom-Pins (commands.py)
+2. MUX-Pin-Routing fuer 4-Leiter, 2-Leiter, Custom-Pins und Multi-Pin Ganging (commands.py & measurement.py)
 3. Binaerprotokoll: 15-Byte Medical vs. 4-Byte Standard, Amplituden-Halbierung, Frame-Parser (commands.py)
 4. HDF5-Dateierstellung und Messdaten-Speicherung (measurement.py)
 """
@@ -28,7 +28,7 @@ from isx3_api.config_handler import (
     ConfigBuilder,
 )
 from isx3_api.commands import ISX3
-from isx3_api.measurement import Measurement
+from isx3_api.measurement import Measurement, parse_mux_sensor_expression
 
 
 class TestConfigHandler(unittest.TestCase):
@@ -45,13 +45,13 @@ class TestConfigHandler(unittest.TestCase):
         self.assertAlmostEqual(parse_frequency_input("1k"), 1000.0)
         self.assertAlmostEqual(parse_frequency_input("1.5MHz"), 1.5e6)
         self.assertAlmostEqual(parse_frequency_input("500Hz"), 500.0)
-        self.assertAlmostEqual(parse_frequency_input("ungueltig"), 100.0)  # Fallback
+        self.assertAlmostEqual(parse_frequency_input("ungueltig"), 100.0)
 
     def test_parse_precision_input(self):
         self.assertAlmostEqual(parse_precision_input("low"), 0.0)
         self.assertAlmostEqual(parse_precision_input("1 (medium - default)"), 1.0)
         self.assertAlmostEqual(parse_precision_input("very high"), 3.0)
-        self.assertAlmostEqual(parse_precision_input(15.0), 10.0)  # Clipping bei 10.0
+        self.assertAlmostEqual(parse_precision_input(15.0), 10.0)
 
     def test_generate_measurement_queue(self):
         """Erstellt eine temporaere INI-Datei und prueft die Queue-Generierung."""
@@ -79,39 +79,37 @@ class TestConfigHandler(unittest.TestCase):
 
 
 class TestMUXRouting(unittest.TestCase):
-    """2. Testet die MUX-Pin-Berechnung (4-Leiter, 2-Leiter und Custom-Pins)."""
+    """2. Testet die MUX-Pin-Berechnung (4-Leiter, 2-Leiter, Custom-Pins und Multi-Pin Ganging)."""
 
     def setUp(self):
         self.isx = ISX3()
 
     def test_4_wire_auto_numbering(self):
-        # Sensor 1 -> Pins 1, 2, 3, 4
-        pins_s1 = self.isx.route_mux_sensor(sensor_idx=1, wire_mode=4)
-        self.assertEqual(pins_s1, (1, 2, 3, 4))
-
-        # Sensor 2 -> Pins 5, 6, 7, 8
-        pins_s2 = self.isx.route_mux_sensor(sensor_idx=2, wire_mode=4)
-        self.assertEqual(pins_s2, (5, 6, 7, 8))
-
-        # Sensor 3 -> Pins 9, 10, 11, 12
-        pins_s3 = self.isx.route_mux_sensor(sensor_idx=3, wire_mode=4)
-        self.assertEqual(pins_s3, (9, 10, 11, 12))
+        self.assertEqual(self.isx.route_mux_sensor(sensor_idx=1, wire_mode=4), (1, 2, 3, 4))
+        self.assertEqual(self.isx.route_mux_sensor(sensor_idx=2, wire_mode=4), (5, 6, 7, 8))
+        self.assertEqual(self.isx.route_mux_sensor(sensor_idx=3, wire_mode=4), (9, 10, 11, 12))
 
     def test_2_wire_auto_numbering(self):
-        # Sensor 1 im 2-Leiter-Modus -> CE=1, RE=1, WS=2, WE=2
-        pins_s1 = self.isx.route_mux_sensor(sensor_idx=1, wire_mode=2)
-        self.assertEqual(pins_s1, (1, 1, 2, 2))
-
-        # Sensor 2 im 2-Leiter-Modus -> CE=3, RE=3, WS=4, WE=4
-        pins_s2 = self.isx.route_mux_sensor(sensor_idx=2, wire_mode=2)
-        self.assertEqual(pins_s2, (3, 3, 4, 4))
+        self.assertEqual(self.isx.route_mux_sensor(sensor_idx=1, wire_mode=2), (1, 1, 2, 2))
+        self.assertEqual(self.isx.route_mux_sensor(sensor_idx=2, wire_mode=2), (3, 3, 4, 4))
 
     def test_custom_pins_override(self):
-        # Benutzerdefinierte Pin-Belegung (z.B. '1: 2,5,8,6' oder 2 kOhm Referenz '22,22,23,23')
         custom = (2, 5, 8, 6)
         pins = self.isx.route_mux_sensor(sensor_idx=1, wire_mode=4, custom_pins=custom)
         self.assertEqual(pins, (2, 5, 8, 6))
         self.assertEqual(self.isx.active_mux_pins, (2, 5, 8, 6))
+
+    def test_multi_pin_ganging_expression(self):
+        """Prueft das Parsing und Routing von '1: CE:1,5,9, RE:2,6,10, WS:3,7,11, WE:4,8,12'."""
+        expr = "1: CE:1,5,9, RE:2,6,10, WS:3,7,11, WE:4,8,12"
+        sensors, pin_map = parse_mux_sensor_expression(expr)
+        self.assertEqual(sensors, [1])
+        expected_tuples = [(1, 2, 3, 4), (5, 6, 7, 8), (9, 10, 11, 12)]
+        self.assertEqual(pin_map[1], expected_tuples)
+
+        routed = self.isx.route_mux_sensor(sensor_idx=1, wire_mode=4, custom_pins=pin_map[1])
+        self.assertEqual(routed, expected_tuples)
+        self.assertEqual(self.isx.active_mux_pins, expected_tuples)
 
     def test_invalid_wire_mode_raises(self):
         with self.assertRaises(ValueError):
@@ -119,7 +117,7 @@ class TestMUXRouting(unittest.TestCase):
 
 
 class TestBinaryProtocol(unittest.TestCase):
-    """3. Testet die binaere Frame-Erstellung und das Auslesen (inkl. Gutachten-Fixes)."""
+    """3. Testet die binaere Frame-Erstellung und das Auslesen (inkl. Multi-Pin & Gutachten-Fixes)."""
 
     def setUp(self):
         self.isx = ISX3()
@@ -134,14 +132,13 @@ class TestBinaryProtocol(unittest.TestCase):
     def test_send_command_framing_and_ack(self):
         self._mock_ack_response()
         self.isx._send_command(0xB6, bytes([0x01]))
-        # Erwarteter Frame: [Tag=0xB6, Laenge=0x01, Payload=0x01, EndTag=0xB6]
         self.isx.device.write.assert_called_once_with(bytes([0xB6, 0x01, 0x01, 0xB6]))
 
     @patch("time.sleep", return_value=None)
     def test_frontend_routing_medical_vs_standard(self, _mock_sleep):
         # 1. Medical-Modus: 15-Byte Payload in 0xB0 (ohne 0xB2)
         self.isx.device_version = "medical"
-        self.isx.route_mux_sensor(sensor_idx=1, wire_mode=4)  # Pins (1, 2, 3, 4)
+        self.isx.route_mux_sensor(sensor_idx=1, wire_mode=4)
 
         sent_frames = []
         with patch.object(self.isx, "_send_command", side_effect=lambda tag, data, **kw: sent_frames.append((tag, data))):
@@ -149,10 +146,9 @@ class TestBinaryProtocol(unittest.TestCase):
                 measurement_mode=2, measurement_channel=3, current_range=2, voltage_range=1
             )
 
-        # Erster Befehl leert den Stack (FF FF FF), zweiter sendet die 15 Bytes
         self.assertEqual(sent_frames[0], (0xB0, bytes([0xFF, 0xFF, 0xFF])))
         self.assertEqual(sent_frames[1][0], 0xB0)
-        self.assertEqual(len(sent_frames[1][1]), 15)  # 3 Bytes Header + 12 Bytes Kanal-Pin-Paare
+        self.assertEqual(len(sent_frames[1][1]), 15)
 
         # 2. Standard-Modus: 4-Byte Payload in 0xB0 + separater 0xB2 Befehl
         self.isx.device_version = "standard"
@@ -163,8 +159,27 @@ class TestBinaryProtocol(unittest.TestCase):
             )
 
         self.assertEqual(sent_frames[0], (0xB0, bytes([0xFF, 0xFF, 0xFF])))
-        self.assertEqual(sent_frames[1], (0xB0, bytes([2, 2, 2, 1])))  # 4 Bytes
-        self.assertEqual(sent_frames[2], (0xB2, bytes([1, 2, 3, 4])))  # 0xB2 Extension Port
+        self.assertEqual(sent_frames[1], (0xB0, bytes([2, 2, 2, 1])))
+        self.assertEqual(sent_frames[2], (0xB2, bytes([1, 2, 3, 4])))
+
+    @patch("time.sleep", return_value=None)
+    def test_multi_pin_stacking_in_medical_mode(self, _mock_sleep):
+        """Prueft, dass bei 3 Pin-Tupeln einmal FF FF FF und danach 3x 15-Byte 0xB0 gesendet wird."""
+        self.isx.device_version = "medical"
+        multi_tuples = [(1, 2, 3, 4), (5, 6, 7, 8), (9, 10, 11, 12)]
+        self.isx.route_mux_sensor(sensor_idx=1, wire_mode=4, custom_pins=multi_tuples)
+
+        sent_frames = []
+        with patch.object(self.isx, "_send_command", side_effect=lambda tag, data, **kw: sent_frames.append((tag, data))):
+            self.isx._apply_frontend_and_routing(
+                measurement_mode=2, measurement_channel=3, current_range=2, voltage_range=1
+            )
+
+        self.assertEqual(len(sent_frames), 4)
+        self.assertEqual(sent_frames[0], (0xB0, bytes([0xFF, 0xFF, 0xFF])))
+        for i in range(1, 4):
+            self.assertEqual(sent_frames[i][0], 0xB0)
+            self.assertEqual(len(sent_frames[i][1]), 15)
 
     @patch("time.sleep", return_value=None)
     def test_amplitude_halving_in_medical_mode(self, _mock_sleep):
@@ -179,32 +194,30 @@ class TestBinaryProtocol(unittest.TestCase):
                 "voltage_range": 1,
                 "frequency": 1000.0,
                 "precision": 1.0,
-                "amplitude": 0.0002,  # 200 uApp eingegeben
+                "amplitude": 0.0002,
                 "excitation_type": 1,
                 "point_delay_us": 0,
                 "phase_sync": False,
             }
             self.isx.set_frequency_setup(setup)
 
-        # Letzter gesendeter Befehl ist 0xB6 Sub-Kommando 0x02
         last_tag, last_payload = sent_frames[-1]
         self.assertEqual(last_tag, 0xB6)
         self.assertEqual(last_payload[0], 0x02)
         freq, prec, sent_amp = struct.unpack(">fff", last_payload[1:13])
-        self.assertAlmostEqual(sent_amp, 0.0001, places=7)  # Halbiert auf 100 uAp!
+        self.assertAlmostEqual(sent_amp, 0.0001, places=7)
 
     def test_read_measurement_data_with_5byte_us_timestamp_and_current_range(self):
         """Prueft das fehlerfreie Parsing von 5-Byte us-Zeitstempeln und Current-Range (Gutachten-Fix)."""
         freq_id_bytes = (1).to_bytes(2, byteorder="big")
-        ts_5bytes = (123456789).to_bytes(5, byteorder="big")  # 5 Byte Mikrosekunden
-        cr_1byte = bytes([0x02])  # Current Range 2
+        ts_5bytes = (123456789).to_bytes(5, byteorder="big")
+        cr_1byte = bytes([0x02])
         real_bytes = struct.pack(">f", 2000.5)
         imag_bytes = struct.pack(">f", -15.25)
 
         payload = freq_id_bytes + ts_5bytes + cr_1byte + real_bytes + imag_bytes
-        length = len(payload)  # 2 + 5 + 1 + 8 = 16 Bytes
+        length = len(payload)
 
-        # Simuliere read-Aufrufe: Start-Tag (0xB8), Laenge (16), Payload, End-Tag (0xB8)
         self.isx.device.read.side_effect = [
             bytes([0xB8]),
             bytes([length]),

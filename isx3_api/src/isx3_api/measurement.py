@@ -18,6 +18,102 @@ from .config_handler import ConfigBuilder, select_config_file
 from .plot_templates import PlotTemplates
 
 
+def parse_mux_sensor_expression(raw_sensors: str) -> tuple[list[int], dict[int, tuple | list[tuple]]]:
+    """
+    Parst komplexe MUX-Sensoreingaben.
+    Unterstuetzt:
+    1. Elektroden-Gruppen (Multi-Pin Ganging):
+       '1: CE:1,5,9, RE:2,6,10, WS:3,7,11, WE:4,8,12'
+       (Mehrere Sensoren koennen mit ';' getrennt werden)
+    2. Einfache Custom-Pins mit Doppelpunkt:
+       '1: 2,5,8,6; 2: 22,22,23,23'
+    3. Standard-Bereiche und Listen:
+       '1-8' oder '1, 3, 5'
+    """
+    active_sensors: list[int] = []
+    custom_sensor_pins_map: dict[int, tuple | list[tuple]] = {}
+
+    # Pruefen, ob benannte Elektroden (CE, RE, WS, WE) enthalten sind
+    if any(lbl in raw_sensors.upper() for lbl in ("CE", "RE", "WS", "WE")):
+        blocks = [b.strip() for b in raw_sensors.split(";") if b.strip()]
+        for blk in blocks:
+            m_head = re.match(r"^(\d+)\s*[:=]\s*(.+)$", blk)
+            if m_head and any(lbl in m_head.group(2).upper() for lbl in ("CE", "RE", "WS", "WE")):
+                s_id = int(m_head.group(1))
+                rest = m_head.group(2)
+            else:
+                s_id = 1
+                rest = blk
+
+            role_matches = list(re.finditer(r"\b(CE|RE|WS|WE)\s*[:=]\s*([0-9,\s\-]+)", rest, flags=re.IGNORECASE))
+            role_pins: dict[str, list[int]] = {}
+            for rm in role_matches:
+                role = rm.group(1).upper()
+                val_str = rm.group(2)
+                pins: list[int] = []
+                for token in val_str.split(","):
+                    t = token.strip()
+                    if not t:
+                        continue
+                    if "-" in t:
+                        a, b = t.split("-", 1)
+                        if a.strip().isdigit() and b.strip().isdigit():
+                            pins.extend(range(int(a), int(b) + 1))
+                    elif t.isdigit():
+                        pins.append(int(t))
+                if pins:
+                    role_pins[role] = pins
+
+            if role_pins:
+                ce_l = role_pins.get("CE", role_pins.get("RE", [1]))
+                re_l = role_pins.get("RE", ce_l)
+                we_l = role_pins.get("WE", role_pins.get("WS", [2]))
+                ws_l = role_pins.get("WS", we_l)
+
+                max_len = max(len(ce_l), len(re_l), len(ws_l), len(we_l))
+                pin_tuples = []
+                for i in range(max_len):
+                    c_p = ce_l[i] if i < len(ce_l) else ce_l[-1]
+                    r_p = re_l[i] if i < len(re_l) else re_l[-1]
+                    s_p = ws_l[i] if i < len(ws_l) else ws_l[-1]
+                    w_p = we_l[i] if i < len(we_l) else we_l[-1]
+                    pin_tuples.append((c_p, r_p, s_p, w_p))
+
+                custom_sensor_pins_map[s_id] = pin_tuples if len(pin_tuples) > 1 else pin_tuples[0]
+                if s_id not in active_sensors:
+                    active_sensors.append(s_id)
+        return active_sensors, custom_sensor_pins_map
+
+    # Klassische Custom-Pins (z.B. '1: 2,5,8,6') oder gemischte ';' Bloecke
+    if ":" in raw_sensors or "=" in raw_sensors:
+        pattern = re.compile(r"(\d+)\s*[:=]\s*(\d+(?:\s*,\s*\d+){1,3})")
+        for match in pattern.finditer(raw_sensors):
+            s_id = int(match.group(1).strip())
+            pins = [int(p.strip()) for p in match.group(2).split(",") if p.strip().isdigit()]
+            if len(pins) == 4:
+                custom_sensor_pins_map[s_id] = tuple(pins)
+                if s_id not in active_sensors:
+                    active_sensors.append(s_id)
+            elif len(pins) == 2:
+                custom_sensor_pins_map[s_id] = (pins[0], pins[0], pins[1], pins[1])
+                if s_id not in active_sensors:
+                    active_sensors.append(s_id)
+        return active_sensors, custom_sensor_pins_map
+
+    # Standard-Bereiche wie '1-2' oder '1,3'
+    for part in raw_sensors.replace(";", ",").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            start_s, end_s = part.split("-", 1)
+            active_sensors.extend(range(int(start_s), int(end_s) + 1))
+        elif part.isdigit():
+            active_sensors.append(int(part))
+
+    return active_sensors, custom_sensor_pins_map
+
+
 class Measurement:
     """Steuert den gesamten Ablauf einer Impedanz-Messkampagne."""
 
@@ -208,35 +304,11 @@ class Measurement:
         live_plot_enabled = bool(self.measurement_settings.get("live_plot_enabled", True))
         live_plot_mode = str(self.measurement_settings.get("live_plot_mode", "point")).strip().lower()
 
-        active_sensors = []
-        custom_sensor_pins_map = {}
-
         if mux_enabled:
-            if ":" in raw_sensors or "=" in raw_sensors:
-                # Hier werden Custom-Pins mit Doppelpunkt (z.B. '1: 2,2,3,3') geparst
-                pattern = re.compile(r"(\d+)\s*[:=]\s*(\d+(?:\s*,\s*\d+){1,3})")
-                for match in pattern.finditer(raw_sensors):
-                    s_id = int(match.group(1).strip())
-                    pins = [int(p.strip()) for p in match.group(2).split(",") if p.strip().isdigit()]
-                    if len(pins) == 4:
-                        custom_sensor_pins_map[s_id] = tuple(pins)
-                        active_sensors.append(s_id)
-                    elif len(pins) == 2:
-                        custom_sensor_pins_map[s_id] = (pins[0], pins[0], pins[1], pins[1])
-                        active_sensors.append(s_id)
-            else:
-                # Hier werden normale Bereiche wie '1-2' oder '1,3' geparst
-                for part in raw_sensors.replace(";", ",").split(","):
-                    part = part.strip()
-                    if not part:
-                        continue
-                    if "-" in part:
-                        start_s, end_s = part.split("-")
-                        active_sensors.extend(range(int(start_s), int(end_s) + 1))
-                    elif part.isdigit():
-                        active_sensors.append(int(part))
+            active_sensors, custom_sensor_pins_map = parse_mux_sensor_expression(raw_sensors)
         else:
             active_sensors = [0]
+            custom_sensor_pins_map = {}
 
         mode_prefix = "MUX" if mux_enabled else "MAIN"
         h5_full_path = self.create_h5_file(mode_prefix=mode_prefix)
@@ -367,8 +439,8 @@ class Measurement:
                 full_path = os.path.join("measurements", self.filename)
                 with h5py.File(full_path, "a") as h5_file:
                     group_key = f"Sensor_{sensor_idx}" if mux_enabled else "Measurement"
-                    if group_key in h5_file:
-                        h5_file[group_key].attrs["measurement_duration_ms"] = duration_ms
+                    grp = h5_file.require_group(group_key)
+                    grp.attrs["measurement_duration_ms"] = duration_ms
 
                 print(f"[INFO] Sensor #{sensor_idx} abgeschlossen. Reale API-Messzeit: {duration_ms:.2f} ms")
 
@@ -378,6 +450,10 @@ class Measurement:
             print("\n[INFO] Messung manuell abgebrochen.")
         finally:
             if self.device:
+                try:
+                    self.device.stop_measurement()
+                except Exception:
+                    pass
                 if mux_enabled:
                     try:
                         self.device.clear_mux_routing()

@@ -2,7 +2,8 @@
 config_gui.py - Grafisches Konfigurationsfenster fuer das Sciospec ISX-3.
 
 Bietet dynamische Einheitenumschaltung (Standard: Peak A/V vs. Medical: Peak-to-Peak App/Vpp),
-Frequenzblock-Tabellen, MUX-Pin-Hilfe sowie den synchronen System-Baseline-Drift-Check.
+Frequenzblock-Tabellen, MUX-Pin-Hilfe (inkl. Multi-Pin Electrode Ganging),
+Aenderungserkennung vor Messstart sowie den synchronen System-Baseline-Drift-Check.
 """
 
 import os
@@ -79,6 +80,7 @@ class ConfigGUI:
         self.config_dir = os.path.abspath("config")
         os.makedirs(self.config_dir, exist_ok=True)
         self.config_path = os.path.join(self.config_dir, "config.ini")
+        self._saved_snapshot = None
 
         if not os.path.exists(self.config_path):
             self._write_default_ini(self.config_path)
@@ -89,6 +91,45 @@ class ConfigGUI:
     def _is_medical(self) -> bool:
         """Prueft, ob der Medical-Modus aktiv ist."""
         return "medical" in self.device_version_var.get().lower()
+
+    def _get_form_state_snapshot(self) -> tuple:
+        """Erstellt einen eindeutigen Fingerabdruck aller aktuellen GUI-Einstellungen."""
+        blocks_state = tuple(
+            tuple(str(v) for v in self.block_tree.item(item_id, "values"))
+            for item_id in self.block_tree.get_children()
+        )
+        return (
+            self.profile_name_var.get().strip(),
+            self.device_version_var.get(),
+            self.port_var.get().strip(),
+            self.baud_var.get().strip(),
+            self.mode_selector_var.get(),
+            self.main_bnc_mode_var.get(),
+            self.mux_sensors_var.get().strip(),
+            self.mux_mode_var.get().strip(),
+            self.mux_chan_var.get(),
+            self.mux_delay_var.get().strip(),
+            self.exc_type_var.get(),
+            self.amp_var.get().strip(),
+            self.curr_range_var.get(),
+            self.volt_range_var.get(),
+            self.spectra_var.get().strip(),
+            self.delay_var.get().strip(),
+            self.sync_time_var.get().strip(),
+            bool(self.phase_sync_var.get()),
+            self.ts_mode_var.get(),
+            bool(self.curr_range_out_var.get()),
+            bool(self.live_plot_enabled_var.get()),
+            self.plot_type_var.get(),
+            self.live_plot_mode_var.get(),
+            blocks_state,
+        )
+
+    def _has_unsaved_changes(self) -> bool:
+        """Gibt True zurueck, wenn seit dem letzten Laden/Speichern etwas verstellt wurde."""
+        if self._saved_snapshot is None:
+            return True
+        return self._get_form_state_snapshot() != self._saved_snapshot
 
     @staticmethod
     def _write_default_ini(target_path: str) -> None:
@@ -165,13 +206,17 @@ live_plot_mode = point
     def _show_pin_help(self) -> None:
         """Zeigt ein Informationsfenster fuer die MUX-Pin-Adressierung an."""
         help_text = (
-            "Hilfe zur Pin-Belegung (MUX32 / MUX64):\n\n"
-            "1. Standard-Bereiche (z.B. '1-8'):\n"
-            "   • Standard-Geraet: Automatische 4-Leiter-Berechnung (Pins 1..4 fuer Sensor 1 usw.).\n"
-            "   • Medical-Geraet: Schaltet CE, RE, WS, WE auf denselben Kanal.\n\n"
-            "2. Individuelle Pin-Belegung (CE, RE, WS, WE):\n"
-            "   Beispiel fuer Direkt-Adressierung: '22: 22,22,23,23'\n"
-            "   Mehrere Sensoren mit Semikolon getrennt: '1: 21,21,22,22; 2: 22,22,23,23'"
+            "Hilfe zur Pin-Belegung (MUX32 / MUX64 / TipSensor):\n\n"
+            "1. Standard-Bereiche & Listen (z.B. '1-2' oder '1,3'):\n"
+            "   • Automatische 4-Leiter-Berechnung (Sensor 1 -> 1,2,3,4; Sensor 2 -> 5,6,7,8).\n"
+            "   • Im 2-Leiter-Modus automatisch 2 Pins pro Sensor (Sensor 1 -> 1,1,2,2).\n\n"
+            "2. Individuelle 4-Pin-Belegung mit Doppelpunkt (CE, RE, WS, WE):\n"
+            "   • Beispiel: '1: 2,5,8,6' oder '22: 22,22,23,23'\n"
+            "   • Mehrere Sensoren mit Semikolon: '1: 2,5,8,6; 2: 22,22,23,23'\n\n"
+            "3. Parallelschalten mehrerer Elektroden (Multi-Pin Ganging):\n"
+            "   • Beispiel fuer TipSensor / Streifenelektroden:\n"
+            "     '1: CE:1,5,9, RE:2,6,10, WS:3,7,11, WE:4,8,12'\n"
+            "   • Mehrere Konfigurationen nacheinander mit Semikolon ';' trennen."
         )
         messagebox.showinfo("MUX Pin-Belegung", help_text, parent=self.root)
 
@@ -345,7 +390,7 @@ live_plot_mode = point
         self.frame_mux = ttk.Frame(self.dynamic_container)
         ttk.Label(self.frame_mux, text="Aktive Sensoren / Pins:").grid(row=0, column=0, sticky=tk.W, padx=5)
         self.mux_sensors_var = tk.StringVar(value="1-8")
-        ttk.Entry(self.frame_mux, textvariable=self.mux_sensors_var, width=22).grid(row=0, column=1, padx=5)
+        ttk.Entry(self.frame_mux, textvariable=self.mux_sensors_var, width=28).grid(row=0, column=1, padx=5)
 
         ttk.Button(self.frame_mux, text="Hilfe zu Pins", command=self._show_pin_help).grid(row=0, column=2, padx=5)
 
@@ -805,13 +850,28 @@ live_plot_mode = point
 
     def load_selected_profile(self, event) -> None:
         sel = self.profiles_combo.get()
-        if sel:
-            target_path = os.path.join(self.config_dir, f"{sel}.ini")
-            if os.path.exists(target_path):
-                self.config_path = target_path
-                self.profile_name_var.set(sel)
-                self.load_ini_to_form()
-                self._log(f"[OK] Profil gewechselt zu: {sel}.ini")
+        if not sel:
+            return
+        target_path = os.path.join(self.config_dir, f"{sel}.ini")
+        if os.path.exists(target_path):
+            if self._has_unsaved_changes():
+                ans = messagebox.askyesnocancel(
+                    "Ungespeicherte Aenderungen",
+                    f"Du hast im aktuellen Profil '{self.profile_name_var.get()}' Einstellungen geaendert, aber noch nicht gespeichert.\n\n"
+                    f"Moechtest du die Aenderungen vor dem Wechsel zu '{sel}.ini' speichern?",
+                    parent=self.root,
+                )
+                if ans is None:
+                    # Abbrechen -> Auswahl in Combobox zuruecksetzen
+                    self.profiles_combo.set(self.profile_name_var.get())
+                    return
+                if ans is True:
+                    self.save_current_form()
+
+            self.config_path = target_path
+            self.profile_name_var.set(sel)
+            self.load_ini_to_form()
+            self._log(f"[OK] Profil gewechselt zu: {sel}.ini")
 
     def load_ini_to_form(self) -> None:
         """Laedt bestehende Werte aus der INI-Datei in alle Eingabefelder."""
@@ -924,6 +984,7 @@ live_plot_mode = point
 
             self._on_mode_change(None)
             self._update_device_specific_labels()
+            self._saved_snapshot = self._get_form_state_snapshot()
             self._log(f"[OK] Profil geladen: {os.path.basename(self.config_path)}")
         except Exception as e:
             messagebox.showerror("Fehler beim Laden", str(e))
@@ -942,6 +1003,8 @@ live_plot_mode = point
     def save_current_form(self) -> bool:
         """Schreibt alle Formulareinstellungen zurueck in die INI-Datei."""
         try:
+            name = self.profile_name_var.get().strip() or "config"
+            self.config_path = os.path.join(self.config_dir, f"{name}.ini")
             curr_range_int = int(self.curr_range_var.get().split()[0])
 
             if not os.path.exists(self.config_path):
@@ -1051,6 +1114,9 @@ live_plot_mode = point
 
             with open(self.config_path, "w", encoding="utf-8") as f:
                 ini.write(f)
+
+            self._saved_snapshot = self._get_form_state_snapshot()
+            self._log(f"[OK] Einstellungen gespeichert in: {os.path.basename(self.config_path)}")
             return True
         except Exception as e:
             messagebox.showerror("Fehler beim Speichern", str(e))
@@ -1103,9 +1169,30 @@ live_plot_mode = point
             messagebox.showwarning("Baseline-Pruefung: Instabilitaet erkannt", full_popup_text, parent=self.root)
 
     def start_measurement_action(self) -> None:
-        """Speichert die Konfiguration und startet die Messkampagne synchron."""
-        if not self.save_current_form():
-            return
+        """Prueft auf ungespeicherte Aenderungen, fragt den Nutzer und startet die Messkampagne."""
+        if self._has_unsaved_changes():
+            prof_name = self.profile_name_var.get().strip() or "config"
+            ans = messagebox.askyesnocancel(
+                "Ungespeicherte Aenderungen erkannt",
+                f"Du hast die Einstellungen in der Oberfläche geaendert, aber noch nicht in '{prof_name}.ini' gespeichert.\n\n"
+                "• [Ja]: Aenderungen jetzt speichern und damit messen (Empfohlen)\n"
+                "• [Nein]: Aenderungen verwerfen und mit dem alten Stand der Datei messen\n"
+                "• [Abbrechen]: Messung noch nicht starten",
+                parent=self.root,
+            )
+            if ans is None:
+                self._log("[INFO] Messstart abgebrochen (ungespeicherte Aenderungen).")
+                return
+            elif ans is True:
+                if not self.save_current_form():
+                    return
+                self.refresh_profile_list()
+                self.profiles_combo.set(prof_name)
+            else:
+                # Nutzer hat 'Nein' gewaehlt -> Formular auf den gespeicherten Datei-Stand zuruecksetzen
+                self._log("[INFO] Ungespeicherte GUI-Aenderungen verworfen. Lade letzten Stand aus INI...")
+                self.load_ini_to_form()
+
         self._log(f"\n[INFO] Starte Messkampagne mit '{os.path.basename(self.config_path)}'...")
         try:
             meas = Measurement()
