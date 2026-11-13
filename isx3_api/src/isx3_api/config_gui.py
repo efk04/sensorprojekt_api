@@ -1,9 +1,9 @@
 """
-config_gui.py - Grafisches Konfigurationsfenster fuer das Sciospec ISX-3.
+config_gui.py - Graphical configuration window for the Sciospec ISX-3.
 
-Bietet dynamische Einheitenumschaltung (Standard: Peak A/V vs. Medical: Peak-to-Peak App/Vpp),
-Frequenzblock-Tabellen, MUX-Pin-Hilfe (inkl. Multi-Pin Electrode Ganging),
-Aenderungserkennung vor Messstart sowie den synchronen System-Baseline-Drift-Check.
+Provides dynamic unit switching (Standard: Peak A/V vs. Medical: Peak-to-Peak App/Vpp),
+frequency block tables, MUX pin addressing help, unsaved change detection prior to
+measurement start, and the synchronous system baseline drift check.
 """
 
 import os
@@ -22,7 +22,7 @@ from .config_handler import (
 
 
 class ConfigGUI:
-    """Tkinter-Hauptfenster fuer Konfiguration, Hardware-Diagnose und Messsteuerung."""
+    """Main Tkinter window for configuration, hardware diagnostics, and measurement control."""
 
     PRECISION_PRESETS = [
         "0 (low - fastest)",
@@ -45,7 +45,7 @@ class ConfigGUI:
         "2 (Current / Strom in App)",
     ]
 
-    # Laut Handbuch Kap. 8.5.5 (0xB0) sind fuer Voltage Range nur 1 und 2 zulaessig
+    # According to manual chapter 8.5.5 (0xB0), only values 1 and 2 are valid for Voltage Range
     VR_VALUES_STANDARD = [
         "1 (±1.0 V Peak Default)",
         "2 (±0.09 V / ±90 mV Peak High Gain)",
@@ -55,7 +55,7 @@ class ConfigGUI:
         "2 (±180 mVpp / ±90 mVp High Gain)",
     ]
 
-    # Strommessbereiche (0 = Dynamisches Autoranging)
+    # Current measurement ranges (0 = dynamic autoranging)
     CR_VALUES_STANDARD = [
         "0 (Autoranging - Dynamisch)",
         "1 (±10 mA / 100 Ω)",
@@ -89,11 +89,11 @@ class ConfigGUI:
         self.load_ini_to_form()
 
     def _is_medical(self) -> bool:
-        """Prueft, ob der Medical-Modus aktiv ist."""
+        """Checks whether the Medical Research ISX-3 mode is currently selected."""
         return "medical" in self.device_version_var.get().lower()
 
     def _get_form_state_snapshot(self) -> tuple:
-        """Erstellt einen eindeutigen Fingerabdruck aller aktuellen GUI-Einstellungen."""
+        """Creates an immutable snapshot of all current GUI input fields and frequency blocks."""
         blocks_state = tuple(
             tuple(str(v) for v in self.block_tree.item(item_id, "values"))
             for item_id in self.block_tree.get_children()
@@ -126,14 +126,14 @@ class ConfigGUI:
         )
 
     def _has_unsaved_changes(self) -> bool:
-        """Gibt True zurueck, wenn seit dem letzten Laden/Speichern etwas verstellt wurde."""
+        """Returns True if any GUI setting has been modified since the last load or save."""
         if self._saved_snapshot is None:
             return True
         return self._get_form_state_snapshot() != self._saved_snapshot
 
     @staticmethod
     def _write_default_ini(target_path: str) -> None:
-        """Schreibt eine Standardkonfiguration, falls noch keine existiert."""
+        """Writes a default configuration file if none exists yet."""
         default_content = """[Connection]
 device_version = standard
 port = COM12
@@ -204,24 +204,27 @@ live_plot_mode = point
             f.write(default_content)
 
     def _show_pin_help(self) -> None:
-        """Zeigt ein Informationsfenster fuer die MUX-Pin-Adressierung an."""
+        """
+        Displays an information dialog explaining MUX pin addressing.
+        Note: Multi-pin electrode ganging help is hidden from the GUI until the
+        manufacturer releases the firmware update for direct register programming.
+        """
         help_text = (
-            "Hilfe zur Pin-Belegung (MUX32 / MUX64 / TipSensor):\n\n"
+            "Hilfe zur Pin-Belegung (MUX32 / MUX64):\n\n"
             "1. Standard-Bereiche & Listen (z.B. '1-2' oder '1,3'):\n"
             "   • Automatische 4-Leiter-Berechnung (Sensor 1 -> 1,2,3,4; Sensor 2 -> 5,6,7,8).\n"
             "   • Im 2-Leiter-Modus automatisch 2 Pins pro Sensor (Sensor 1 -> 1,1,2,2).\n\n"
             "2. Individuelle 4-Pin-Belegung mit Doppelpunkt (CE, RE, WS, WE):\n"
             "   • Beispiel: '1: 2,5,8,6' oder '22: 22,22,23,23'\n"
-            "   • Mehrere Sensoren mit Semikolon: '1: 2,5,8,6; 2: 22,22,23,23'\n\n"
-            "3. Parallelschalten mehrerer Elektroden (Multi-Pin Ganging):\n"
-            "   • Beispiel fuer TipSensor / Streifenelektroden:\n"
-            "     '1: CE:1,5,9, RE:2,6,10, WS:3,7,11, WE:4,8,12'\n"
-            "   • Mehrere Konfigurationen nacheinander mit Semikolon ';' trennen."
+            "   • Mehrere Sensoren mit Semikolon trennen: '1: 2,5,8,6; 2: 22,22,23,23'"
         )
+        # --- HIDDEN PLACEHOLDER FOR FUTURE FIRMWARE REGISTER UPDATE ---
+        # "3. Parallelschalten mehrerer Elektroden (Multi-Pin Ganging via Register):\n"
+        # "   • '1: CE:1,5,9, RE:2,6,10, WS:3,7,11, WE:4,8,12'\n"
         messagebox.showinfo("MUX Pin-Belegung", help_text, parent=self.root)
 
     def _show_device_comparison_info(self) -> None:
-        """Zeigt Details zu Geraete-Unterschieden an."""
+        """Displays detailed information about differences between Standard and Medical models."""
         info_text = (
             "Detaillierter Vergleich: Standard ISX-3 vs. Medical Research ISX-3\n"
             "==================================================================\n\n"
@@ -238,7 +241,7 @@ live_plot_mode = point
         messagebox.showinfo("Info: Standard vs. Medical Einstellungen", info_text, parent=self.root)
 
     def _log(self, msg: str) -> None:
-        """Gibt Meldungen im Statusfenster der GUI und im Terminal aus."""
+        """Prints status messages to both the GUI log widget and the terminal."""
         if hasattr(self, "log_text"):
             self.log_text.insert(tk.END, msg + "\n")
             self.log_text.see(tk.END)
@@ -268,7 +271,7 @@ live_plot_mode = point
         self._log(f"[INFO] Gefundene COM-Ports: {', '.join(ports)}")
 
     def _build_ui(self) -> None:
-        # 1. Profil-Verwaltung oben
+        # 1. Top profile management bar
         profile_frame = ttk.LabelFrame(self.root, text=" Profil-Verwaltung & Diagnose ", padding=8)
         profile_frame.pack(fill=tk.X, padx=10, pady=4)
 
@@ -294,7 +297,7 @@ live_plot_mode = point
             row=0, column=6, padx=10, sticky=tk.E
         )
 
-        # 2. Status-Banner oben
+        # 2. Top status banner
         self.info_banner_frame = tk.Frame(self.root, bg="#e8f4f8", highlightbackground="#006699", highlightthickness=1, padx=10, pady=6)
         self.info_banner_frame.pack(fill=tk.X, padx=10, pady=4)
 
@@ -315,7 +318,7 @@ live_plot_mode = point
             command=self._show_device_comparison_info,
         ).pack(side=tk.RIGHT, padx=5)
 
-        # 3. Haupt-Notebook
+        # 3. Main tabbed notebook
         notebook = ttk.Notebook(self.root)
         notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=4)
 
@@ -327,7 +330,7 @@ live_plot_mode = point
         notebook.add(tab_signal, text=" 2. Anregung, Messbereiche & Timing ")
         notebook.add(tab_plot, text=" 3. Zeitstempel & Live-Plot ")
 
-        # TAB 1: Verbindung
+        # TAB 1: Serial connection
         conn_frame = ttk.LabelFrame(tab_main, text=" Geraete-Modell & Serielle Verbindung (USB / Virtual COM Port) ", padding=8)
         conn_frame.pack(fill=tk.X, pady=4)
 
@@ -353,7 +356,7 @@ live_plot_mode = point
         self.baud_var = tk.StringVar(value="115200")
         ttk.Combobox(conn_frame, textvariable=self.baud_var, values=["9600", "57600", "115200", "230400", "921600"], width=10).grid(row=0, column=6, padx=3, pady=4)
 
-        # TAB 1: Routing & MUX
+        # TAB 1: Operating mode & hardware routing
         mode_frame = ttk.LabelFrame(tab_main, text=" Betriebsart & Hardware-Routing (0xB0 / 0xB2) ", padding=8)
         mode_frame.pack(fill=tk.X, pady=4)
 
@@ -413,7 +416,7 @@ live_plot_mode = point
         self.mux_delay_var = tk.StringVar(value="0.10")
         ttk.Entry(self.frame_mux, textvariable=self.mux_delay_var, width=7).grid(row=0, column=8, padx=5)
 
-        # TAB 1: Frequenz-Bloecke
+        # TAB 1: Frequency blocks table
         block_frame = ttk.LabelFrame(tab_main, text=" Frequenz-Bloecke & Block-Spezifische Anregung (0xB6 0x03) ", padding=8)
         block_frame.pack(fill=tk.BOTH, expand=True, pady=4)
 
@@ -445,7 +448,7 @@ live_plot_mode = point
         ttk.Button(btn_subframe, text="Block bearbeiten", command=self._edit_frequency_block).pack(side=tk.LEFT, padx=3)
         ttk.Button(btn_subframe, text="Block loeschen", command=self._delete_frequency_block).pack(side=tk.LEFT, padx=3)
 
-        # TAB 2: Signal & Bereiche
+        # TAB 2: Excitation & frontend ranges
         exc_frame = ttk.LabelFrame(tab_signal, text=" Globale Anregung & Analoge Frontend-Messbereiche ", padding=10)
         exc_frame.pack(fill=tk.X, pady=5)
 
@@ -528,7 +531,7 @@ live_plot_mode = point
             variable=self.phase_sync_var,
         ).grid(row=3, column=0, columnspan=3, sticky=tk.W, padx=5, pady=4)
 
-        # TAB 3: Optionen & Plot
+        # TAB 3: Frame options & live plot
         opt_frame = ttk.LabelFrame(tab_plot, text=" Datenframe-Optionen (0x97) ", padding=10)
         opt_frame.pack(fill=tk.X, pady=5)
 
@@ -584,7 +587,7 @@ live_plot_mode = point
         self._update_device_specific_labels()
 
     def _update_device_specific_labels(self) -> None:
-        """Passt Labels und Hinweise je nach gewaehltem Geraetetyp an."""
+        """Updates UI labels and hints dynamically based on the selected device model."""
         is_med = self._is_medical()
 
         exc_code = "1" if self.exc_type_var.get().startswith("1") else "2"
@@ -862,7 +865,7 @@ live_plot_mode = point
                     parent=self.root,
                 )
                 if ans is None:
-                    # Abbrechen -> Auswahl in Combobox zuruecksetzen
+                    # Cancel -> reset combobox selection to previous profile name
                     self.profiles_combo.set(self.profile_name_var.get())
                     return
                 if ans is True:
@@ -874,7 +877,7 @@ live_plot_mode = point
             self._log(f"[OK] Profil gewechselt zu: {sel}.ini")
 
     def load_ini_to_form(self) -> None:
-        """Laedt bestehende Werte aus der INI-Datei in alle Eingabefelder."""
+        """Loads existing values from the INI file into all GUI form fields."""
         try:
             ini = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
             ini.read(self.config_path, encoding="utf-8")
@@ -1001,7 +1004,7 @@ live_plot_mode = point
             messagebox.showinfo("Gespeichert", f"Profil '{name}.ini' wurde vollstaendig gesichert.")
 
     def save_current_form(self) -> bool:
-        """Schreibt alle Formulareinstellungen zurueck in die INI-Datei."""
+        """Writes all current GUI form settings back to the INI file."""
         try:
             name = self.profile_name_var.get().strip() or "config"
             self.config_path = os.path.join(self.config_dir, f"{name}.ini")
@@ -1123,7 +1126,7 @@ live_plot_mode = point
             return False
 
     def run_selftest_action(self) -> None:
-        """Fuehrt die synchrone Baseline-Drift-Pruefung auf dem internen 2 kΩ Referenzpfad aus."""
+        """Executes the synchronous baseline drift check on the internal 2 kOhm reference path."""
         port = self.port_var.get().strip() or "COM12"
         try:
             baudrate = int(self.baud_var.get().strip() or 115200)
@@ -1169,7 +1172,7 @@ live_plot_mode = point
             messagebox.showwarning("Baseline-Pruefung: Instabilitaet erkannt", full_popup_text, parent=self.root)
 
     def start_measurement_action(self) -> None:
-        """Prueft auf ungespeicherte Aenderungen, fragt den Nutzer und startet die Messkampagne."""
+        """Checks for unsaved changes, prompts the user if necessary, and starts the measurement campaign."""
         if self._has_unsaved_changes():
             prof_name = self.profile_name_var.get().strip() or "config"
             ans = messagebox.askyesnocancel(
@@ -1189,7 +1192,7 @@ live_plot_mode = point
                 self.refresh_profile_list()
                 self.profiles_combo.set(prof_name)
             else:
-                # Nutzer hat 'Nein' gewaehlt -> Formular auf den gespeicherten Datei-Stand zuruecksetzen
+                # User selected 'No' -> revert form to the last saved INI file state
                 self._log("[INFO] Ungespeicherte GUI-Aenderungen verworfen. Lade letzten Stand aus INI...")
                 self.load_ini_to_form()
 
@@ -1204,7 +1207,7 @@ live_plot_mode = point
 
 
 def run_gui():
-    """Startet die GUI."""
+    """Launches the Tkinter configuration GUI."""
     root = tk.Tk()
     app = ConfigGUI(root)
     root.mainloop()

@@ -1,8 +1,8 @@
 """
-config_handler.py - Konfigurationsparser, Validierer und Mess-Queue-Generator fuer das ISX-3.
+config_handler.py - Configuration parser, validator, and measurement queue generator for the ISX-3.
 
-Liest INI-Dateien ein, loest SI-Praefixe auf ('100u', '1M', '100k') und erstellt
-daraus die sequenzielle Abfolge von Frequenzmesspunkten.
+Reads INI configuration files, resolves SI prefixes ('100u', '1M', '100k'), and builds
+the sequential queue of frequency measurement steps.
 """
 
 import configparser
@@ -12,8 +12,8 @@ import numpy as np
 
 def parse_value_with_prefix(val_str: str | float | int) -> float:
     """
-    Parst Zeichenketten mit SI-Praefixen und physikalischen Einheiten
-    (z.B. '0.0001', '100u', '100uA', '1m', '100mVpp').
+    Parses strings containing SI prefixes and physical units
+    (e.g., '0.0001', '100u', '100uA', '1m', '100mVpp').
     """
     if isinstance(val_str, (int, float)):
         return float(val_str)
@@ -41,7 +41,7 @@ def parse_value_with_prefix(val_str: str | float | int) -> float:
 
 
 def parse_frequency_input(value_str: str | float | int) -> float:
-    """Konvertiert Frequenzeingaben mit 'k', 'm' oder 'hz' in reine Hertz-Gleitkommazahlen."""
+    """Converts frequency strings with 'k', 'm', or 'hz' into floating-point Hertz values."""
     if isinstance(value_str, (int, float)):
         return float(value_str)
     value_str = str(value_str).strip().lower()
@@ -67,7 +67,7 @@ def parse_frequency_input(value_str: str | float | int) -> float:
 
 
 def parse_precision_input(val: str | float | int) -> float:
-    """Wandelt Precision-Texte ('low', 'medium', 'high') oder Zahlenwerte in Float um."""
+    """Converts precision preset strings ('low', 'medium', 'high') or numbers into floats."""
     if isinstance(val, (int, float)):
         return float(np.clip(float(val), 0.0, 10.0))
 
@@ -185,7 +185,7 @@ class DeviceConfig:
 
 
 class ConfigParser:
-    """Liest INI-Dateien mit Fallback-Werten ein."""
+    """Reads INI configuration files with fallback defaults."""
 
     def __init__(self, file_path: str):
         self.file_path = file_path
@@ -310,7 +310,7 @@ class ConfigParser:
         return asdict(self.parse())
 
     def parse_as_flat_dict(self, use_prefix: bool = False) -> dict:
-        """Wandelt verschachtelte Abschnitte in ein einfaches Dictionary um."""
+        """Flattens nested configuration sections into a single-level dictionary."""
         nested_dict = self.parse_as_dict()
         flat_dict = {}
         for section, values in nested_dict.items():
@@ -338,7 +338,7 @@ class ConfigParser:
 
 
 class ConfigBuilder:
-    """Erzeugt die Mess-Queue aus der Konfiguration."""
+    """Generates the sequential measurement setup queue from the parsed configuration."""
 
     def __init__(self, config_path: str = "config/config.ini"):
         self.parser = ConfigParser(config_path)
@@ -355,7 +355,7 @@ class ConfigBuilder:
         return self.settings
 
     def parse_frequency_blocks(self) -> list[dict]:
-        """Liest Frequenzbloecke inklusive block-spezifischer Anregung aus der INI."""
+        """Reads frequency blocks including block-specific excitation settings from the INI file."""
         self.settings = self.get_settings_from_config()
         ini = self.parser.parser
         blocks = []
@@ -446,7 +446,7 @@ class ConfigBuilder:
         return blocks
 
     def generate_measurement_queue(self) -> list[dict]:
-        """Erstellt die sequenzielle Liste aller Frequenz-Setups fuer die Messung."""
+        """Creates the sequential list of frequency point setups for the measurement run."""
         self.measurement_setup_queue = []
         self.settings = self.get_settings_from_config()
         blocks = self.parse_frequency_blocks()
@@ -518,7 +518,7 @@ class ConfigBuilder:
 
 
 def select_config_file() -> str | None:
-    """Oeffnet einen Dateiauswahldialog fuer .ini-Dateien."""
+    """Opens a file selection dialog for .ini configuration files."""
     from tkinter import Tk, filedialog
     root = Tk()
     root.withdraw()

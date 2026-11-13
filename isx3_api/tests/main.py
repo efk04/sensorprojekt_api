@@ -1,10 +1,10 @@
 """
-main.py - Einstiegspunkt fuer das ISX-3 Mess-Framework.
+main.py - Entry point for the ISX-3 measurement framework.
 
-Ermoeglicht drei Arbeitsweisen:
-1. Grafische Benutzeroberflaeche (GUI) zur komfortablen Bedienung.
-2. Laden einer vorhandenen INI-Datei ueber die Pfadeingabe.
-3. Schrittweiser, interaktiver Konsolen-Assistent zur Erstellung neuer Profile.
+Supports three operating modes:
+1. Graphical User Interface (GUI) for interactive configuration and control.
+2. Direct loading of an existing INI configuration file via path input.
+3. Step-by-step interactive console wizard for creating new profiles.
 """
 
 import sys
@@ -12,7 +12,7 @@ import os
 import configparser
 import serial.tools.list_ports
 
-# Sicherstellen, dass das Modul isx3_api im src-Verzeichnis importiert werden kann
+# Ensure that the isx3_api package inside the src directory can be imported
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
 
 from isx3_api.measurement import Measurement
@@ -22,8 +22,8 @@ from isx3_api.config_handler import parse_value_with_prefix
 
 def interactive_console_config() -> str | None:
     """
-    Fuehrt interaktiv durch die Erstellung einer neuen .ini-Konfigurationsdatei
-    direkt im Terminal (nuetzlich fuer Headless-Systeme ohne GUI).
+    Guides the user interactively through creating a new .ini configuration file
+    directly in the terminal (useful for headless systems without a GUI).
     """
     print("\n" + "=" * 70)
     print(" INTERAKTIVE KONSOLEN-KONFIGURATION FUER SCIOSPEC ISX-3")
@@ -35,14 +35,14 @@ def interactive_console_config() -> str | None:
     ini = configparser.ConfigParser()
     ini.optionxform = str
 
-    # Alle Standard-Sektionen im Konfigurations-Objekt anlegen
+    # Create all standard sections in the configuration object
     for sec in [
         "Connection", "MUX", "Frontend", "ExtensionPort",
         "FrequencySetup", "FrequencyBlocks", "DCBias", "SyncTime", "Options", "Measurement", "ApiSettings"
     ]:
         ini.add_section(sec)
 
-    # 0. Geraete-Modell waehlen (Unterscheidung Standard vs. Medical Research)
+    # 0. Select device model (Standard vs. Medical Research)
     print("\n--- 0. GERAETE-MODELL WAEHLEN ---")
     print("  [1] ISX-3 / ISX-3mini (Standard - Klassisches 0xB0 / 0xB2 Protokoll) [Standard]")
     print("  [2] Medical Research ISX-3 (Neues 15-Byte 0xB0 Protokoll ohne 0xB2)")
@@ -64,7 +64,7 @@ def interactive_console_config() -> str | None:
         print(" • Spannungsbereiche: ±1.0 V Peak bzw. ±0.09 V (±90 mV) Peak.")
     print("-" * 70)
 
-    # 1. Serielle Verbindung (USB / Virtueller COM-Port)
+    # 1. Serial connection (USB / Virtual COM Port)
     print("\n--- 1. SERIELLE VERBINDUNG (USB / VIRTUAL COM PORT) ---")
     available_ports = [p.device for p in serial.tools.list_ports.comports()]
     if not available_ports:
@@ -102,7 +102,7 @@ def interactive_console_config() -> str | None:
         selected_baud = "115200"
     ini.set("Connection", "baudrate", selected_baud if selected_baud.isdigit() else "115200")
 
-    # 2. Betriebsart & Routing (Main Port vs. Multiplexer)
+    # 2. Operating mode & routing (Main Port vs. Multiplexer)
     print("\n--- 2. BETRIEBSART & ROUTING ---")
     print("  [1] Main Port (Front-BNC - Standard 2-, 3- oder 4-Leiter)")
     print("  [2] MUX32 / MUX64 Multiplexer (Interner oder Externer MUX)")
@@ -154,7 +154,7 @@ def interactive_console_config() -> str | None:
     for ep_key in ["counter_port", "reference_port", "working_sense_port", "working_port"]:
         ini.set("ExtensionPort", ep_key, "0")
 
-    # 3. Analoge Frontend-Messbereiche
+    # 3. Analog frontend measurement ranges
     print("\n--- 3. ANALOGE FRONTEND-MESSBEREICHE ---")
     print("  Strommessbereiche (Current Range):")
     print("    [0] Autoranging (Dynamisch fuer Spulen L / Kondensatoren C)")
@@ -175,7 +175,7 @@ def interactive_console_config() -> str | None:
     v_rng = input("Waehle Spannungsbereich (1 oder 2) [Standard: 1]: ").strip()
     ini.set("Frontend", "voltage_range", v_rng if v_rng in ["1", "2"] else "1")
 
-    # 4. Frequenz-Bloecke (Unterstuetzung fuer mehrere Bloecke)
+    # 4. Frequency blocks configuration (supports multiple blocks)
     print("\n--- 4. FREQUENZBLOECKE KONFIGURIEREN ---")
     block_idx = 1
     while True:
@@ -228,7 +228,7 @@ def interactive_console_config() -> str | None:
         else:
             break
 
-    # 5. Timing & spektrale Wiederholungen
+    # 5. Timing & spectral repetitions
     print("\n--- 5. TIMING & SPEKTRALE WIEDERHOLUNGEN ---")
     spectra = input("  Anzahl Spectra (Average Count / Wiederholungen) [Standard: 1]: ").strip() or "1"
     ini.set("Measurement", "number_of_spectra", spectra)
@@ -242,7 +242,7 @@ def interactive_console_config() -> str | None:
     ph_sync_in = input("  Phase Synchronization aktivieren (nur fuer f >= 100 kHz)? (j/[N]): ").strip().lower()
     ini.set("FrequencySetup", "phase_sync", "True" if ph_sync_in in ["j", "ja", "y", "yes"] else "False")
 
-    # 6. Optionen & Zeitstempel (Befehl 0x97)
+    # 6. Hardware options & timestamps (command 0x97)
     print("\n--- 6. HARDWARE-OPTIONEN (0x97) ---")
     ini.set("DCBias", "dc_bias_enabled", "False")
     ini.set("DCBias", "bias_voltage_v", "0.0")
@@ -257,7 +257,7 @@ def interactive_console_config() -> str | None:
     cr_out_in = input("  Aktuellen Current-Range im Messframe ausgeben (Option 0x04)? (j/[N]): ").strip().lower()
     ini.set("Options", "enable_current_range_output", "True" if cr_out_in in ["j", "ja", "y", "yes"] else "False")
 
-    # 7. Live-Plot Einstellungen
+    # 7. Live plot settings
     print("\n--- 7. VISUALISIERUNG & LIVE-PLOT ---")
     lp_en_in = input("  Live-Plot waehrend der Messung anzeigen? ([J]/n): ").strip().lower()
     ini.set("ApiSettings", "live_plot_enabled", "False" if lp_en_in in ["n", "nein", "no"] else "True")
@@ -278,7 +278,7 @@ def interactive_console_config() -> str | None:
     ini.set("ApiSettings", "live_plot_mode", "sweep" if lpm_in == "2" else "point")
     ini.set("ApiSettings", "continuous_measurement", "False")
 
-    # Profil dauerhaft sichern oder temporaer nutzen
+    # Save profile permanently or use temporarily for this run
     save_choice = input("\nKonfiguration dauerhaft als .ini speichern? ([J]/n): ").strip().lower()
     if save_choice in ["", "j", "ja", "y", "yes"]:
         custom_name = input("Dateiname fuer die INI eingeben [Standard: config]: ").strip() or "config"
@@ -298,7 +298,7 @@ def interactive_console_config() -> str | None:
 
 
 def main():
-    """Startmenue fuer das Mess-Framework."""
+    """Main menu for the measurement framework."""
     print("=" * 70)
     print(" Sciospec ISX-3 (Standard & Medical Research) - Mess-Framework")
     print("=" * 70)

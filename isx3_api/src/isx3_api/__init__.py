@@ -1,5 +1,5 @@
 """
-isx3_api - Python API fuer das Sciospec ISX-3 Impedanzspektrometer.
+isx3_api - Python API package for the Sciospec ISX-3 impedance analyzer.
 """
 
 from .commands import ISX3

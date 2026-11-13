@@ -1,13 +1,14 @@
 """
-auswertung_visualisierung.py - Universelle Auswertung, Timing-Analyse & Vergleichs-Visualisierung
-für eigene API-HDF5-Messdateien (.h5) und offizielle Sciospec-GUI-HDF5-Dateien (.scio5 / .h5).
+auswertung_visualisierung.py - Universal evaluation, timing analysis, and comparison visualization
+for custom Python API HDF5 files (.h5) and official Sciospec GUI HDF5 files (.scio5 / .h5).
 
-Integrierte Features:
-1. Timing- & Performance-Analyse pro Sensor (Gesamtzeit, Zeit pro Einzel-Sweep & Zeit pro Frequenzpunkt)
-2. Statistische Wiederholgenauigkeit (Standardabweichung ±1σ als Fehlerband bei Mehrfach-Sweeps)
-3. Dynamische Autoranging-Auswertung (Erkennung von Current-Range-Wechseln über der Frequenz)
-4. Multi-Plot-Auswahl (Bode, Nyquist, Real/Imag oder Kombi-Dashboard Bode + Nyquist)
-5. Automatischer Konfigurations-Steckbrief (inkl. Multi-Pin MUX-Belegung) & Bauteil-Schätzung (R, C, L)
+Integrated features:
+1. Timing & performance analysis per sensor (total duration, single-sweep duration, time per point)
+2. Statistical repeatability (±1 sigma standard deviation shaded error bands for multi-sweep runs)
+3. Dynamic autoranging evaluation (detection of current range switches across frequencies)
+4. Multi-plot selection (Bode, Nyquist, Real/Imag, or combined Bode + Nyquist dashboard)
+5. Automatic configuration summary & equivalent circuit component estimation (R, C, L)
+6. Multi-file overlay comparison (e.g., comparing 2 or more measurement series in one figure)
 """
 
 import os
@@ -29,7 +30,7 @@ CR_LABELS = {
 
 
 def select_h5_file(title: str = "Wähle eine HDF5-Messdatei (.h5 / .scio5)") -> str | None:
-    """Öffnet einen Dateidialog zur Auswahl einer API- oder Sciospec-HDF5-Datei."""
+    """Opens a file dialog to select an API or Sciospec HDF5 measurement file."""
     root = Tk()
     root.withdraw()
     root.attributes("-topmost", True)
@@ -47,7 +48,7 @@ def select_h5_file(title: str = "Wähle eine HDF5-Messdatei (.h5 / .scio5)") -> 
 
 
 def _estimate_component(freqs: np.ndarray, z_mag: np.ndarray, phase: np.ndarray, imag: np.ndarray) -> str:
-    """Schätzt anhand des Phasenwinkels, ob ein Widerstand (R), Kondensator (C) oder Induktivität (L) vorliegt."""
+    """Estimates whether a resistor (R), capacitor (C), or inductor (L) is measured based on phase angle."""
     if len(freqs) == 0:
         return "Keine Daten"
 
@@ -78,7 +79,7 @@ def _estimate_component(freqs: np.ndarray, z_mag: np.ndarray, phase: np.ndarray,
 
 
 def _parse_api_hdf5(h5: h5py.File) -> tuple[dict[str, dict], list[float], dict]:
-    """Liest das eigene Python-API HDF5-Format inklusive Timing, Standardabweichung und Autoranging aus."""
+    """Parses the custom Python API HDF5 format including timing, standard deviation, and autoranging."""
     results = {}
     block_transitions = []
     meta_info = {"type": "API", "sections": {}}
@@ -188,7 +189,7 @@ def _parse_api_hdf5(h5: h5py.File) -> tuple[dict[str, dict], list[float], dict]:
                 total_pts = n_pts * min_len
                 hw_total_ms = total_span * (total_pts / max(1, total_pts - 1))
 
-        # Dauer für EINEN einzelnen Sweep berechnen (entweder aus HW-Timestamps oder aus API-Gesamtzeit / Spectra)
+        # Calculate duration for a single sweep (either from HW timestamps or API total duration / spectra)
         single_sweep_ms = None
         if hw_sweep_ms_list:
             single_sweep_ms = float(np.mean(hw_sweep_ms_list))
@@ -223,7 +224,7 @@ def _parse_api_hdf5(h5: h5py.File) -> tuple[dict[str, dict], list[float], dict]:
 
 
 def _parse_sciospec_gui_hdf5(h5: h5py.File) -> tuple[dict[str, dict], list[float], dict]:
-    """Liest das native Sciospec-Software HDF5-Format (.scio5 / .h5) inklusive Standardabweichung und Timestamps aus."""
+    """Parses the native Sciospec software HDF5 format (.scio5 / .h5) including standard deviation and timestamps."""
     results = {}
     block_transitions = []
     meta_info = {"type": "SCIOSPEC_GUI", "sections": {}}
@@ -323,7 +324,7 @@ def _parse_sciospec_gui_hdf5(h5: h5py.File) -> tuple[dict[str, dict], list[float
 
 
 def parse_any_hdf5_file(h5_file: str) -> tuple[dict[str, dict], list[float], str, dict]:
-    """Erkennt automatisch, ob eine API-HDF5-Datei oder eine Sciospec-GUI-HDF5-Datei vorliegt."""
+    """Automatically detects whether an API HDF5 file or a Sciospec GUI HDF5 file is provided."""
     with h5py.File(h5_file, "r") as h5:
         keys = list(h5.keys())
         is_api = any(
@@ -343,7 +344,7 @@ def parse_any_hdf5_file(h5_file: str) -> tuple[dict[str, dict], list[float], str
 
 
 def print_diagnostic_report(data_dict: dict, meta_info: dict, file_name: str) -> None:
-    """Gibt den kompletten Konfigurations-Steckbrief, die Timing-Analyse, Autoranging und Bauteil-Schätzung aus."""
+    """Prints the configuration summary, timing analysis, autoranging details, and component estimation."""
     print("\n" + "=" * 80)
     print(f" DIAGNOSE-, TIMING- & BAUTEIL-REPORT: {file_name}")
     print("=" * 80)
@@ -408,7 +409,7 @@ def print_diagnostic_report(data_dict: dict, meta_info: dict, file_name: str) ->
 
 
 def _ask_plot_and_axis_options() -> dict:
-    """Fragt den Nutzer nach Diagrammtyp, Achsenskalierung und Fehlerbändern."""
+    """Prompts the user for diagram type, axis scaling, and standard deviation error bands."""
     print("\n--- DIAGRAMM- & DARSTELLUNGS-OPTIONEN ---")
     print("  Welchen Diagramm-Typ möchtest du anzeigen?")
     print("    [1] Bode-Diagramm (|Z| und Phase φ über Frequenz) [Standard]")
@@ -471,6 +472,7 @@ def _ask_plot_and_axis_options() -> dict:
 
 
 def _apply_axis_limits(ax_z, ax_p, axis_opts: dict) -> None:
+    """Applies logarithmic/linear scaling and optional user-defined axis bounds."""
     ax_z.set_xscale(axis_opts["x_scale"])
     ax_z.set_yscale(axis_opts["y_scale"])
     ax_p.set_xscale(axis_opts["x_scale"])
@@ -497,7 +499,7 @@ def _apply_axis_limits(ax_z, ax_p, axis_opts: dict) -> None:
 
 
 def _draw_bode_on_axes(ax_z, ax_p, data_dict: dict, transitions: list[float], axis_opts: dict, colors: list[str], prefix: str = "", line_style: str = "o-") -> None:
-    """Hilfsfunktion zum Zeichnen von Bode-Kurven inkl. ±1σ-Fehlerband und Sweep-Dauer in der Legende."""
+    """Helper function to draw Bode curves including ±1 sigma error bands and single-sweep duration in the legend."""
     for ch_idx, (label, data) in enumerate(data_dict.items()):
         freqs = data["frequency"]
         z_mag = data["z_mag"]
@@ -552,7 +554,7 @@ def _draw_bode_on_axes(ax_z, ax_p, data_dict: dict, transitions: list[float], ax
 
 
 def plot_single_file(data_dict: dict, transitions: list[float], file_name: str, file_type: str, axis_opts: dict) -> None:
-    """Plottet eine einzelne Datei im gewählten Modus (Bode, Dashboard, Nyquist oder Real/Imag)."""
+    """Plots a single HDF5 file in the selected mode (Bode, Dashboard, Nyquist, or Real/Imag)."""
     if not data_dict:
         print("[FEHLER] Keine gültigen Messdaten in der Datei gefunden.")
         return
@@ -656,7 +658,7 @@ def plot_comparison(
     transitions: list[float],
     axis_opts: dict,
 ) -> None:
-    """Plottet zwei HDF5-Dateien (z.B. API vs. Sciospec-GUI) zum direkten Vergleich inklusive Timing-Vergleich."""
+    """Overlays two HDF5 files (e.g., API vs. Sciospec GUI) for direct visual and statistical comparison."""
     if not data_1 or not data_2:
         print("[FEHLER] Mindestens eine der beiden Dateien enthält keine gültigen Messdaten.")
         return
@@ -739,80 +741,24 @@ def plot_comparison(
     plt.show()
 
 
-def main():
-    print("\n" + "=" * 75)
-    print(" HDF5 AUSWERTUNG, TIMING-ANALYSE & VERGLEICH (API & SCIOSPEC-GUI)")
-    print("=" * 75)
-    print("Was möchtest du tun?")
-    print("  [1] Nur EINE Datei auswerten & plotten (API .h5 ODER Sciospec-GUI .scio5/.h5) [Standard]")
-    print("  [2] ZWEI Dateien direkt vergleichen (z.B. API-Messung vs. Sciospec-GUI)")
-    mode_choice = input("\nDeine Wahl (1 oder 2) [Standard: 1]: ").strip()
-
-    if mode_choice == "2":
-        print("\n-> Bitte wähle zuerst die 1. Datei aus (z.B. deine API-Messdatei)...")
-        path_1 = select_h5_file(title="1. HDF5-Datei wählen (z.B. API-Messung)")
-        if not path_1:
-            print("[INFO] Keine 1. Datei ausgewählt. Abbruch.")
-            return
-
-        print("-> Bitte wähle nun die 2. Datei zum Vergleich aus (z.B. Sciospec-GUI Export)...")
-        path_2 = select_h5_file(title="2. HDF5-Datei zum Vergleich wählen (z.B. Sciospec-GUI)")
-        if not path_2:
-            print("[INFO] Keine 2. Datei ausgewählt. Abbruch.")
-            return
-
-        data_1, trans_1, type_1, meta_1 = parse_any_hdf5_file(path_1)
-        data_2, trans_2, type_2, meta_2 = parse_any_hdf5_file(path_2)
-        print_diagnostic_report(data_1, meta_1, os.path.basename(path_1))
-        print_diagnostic_report(data_2, meta_2, os.path.basename(path_2))
-
-        axis_opts = _ask_plot_and_axis_options()
-        all_trans = sorted(list(set(trans_1 + trans_2)))
-        plot_comparison(
-            data_1=data_1,
-            name_1=os.path.basename(path_1),
-            data_2=data_2,
-            name_2=os.path.basename(path_2),
-            transitions=all_trans,
-            axis_opts=axis_opts,
-        )
-    else:
-        print("\n-> Bitte wähle die HDF5-Datei aus (API .h5 oder Sciospec-GUI .scio5/.h5)...")
-        h5_path = select_h5_file(title="HDF5-Messdatei wählen (API oder Sciospec-GUI)")
-        if not h5_path:
-            print("[INFO] Keine Datei ausgewählt. Abbruch.")
-            return
-
-        data_dict, transitions, f_type, meta_info = parse_any_hdf5_file(h5_path)
-        print_diagnostic_report(data_dict, meta_info, os.path.basename(h5_path))
-
-        axis_opts = _ask_plot_and_axis_options()
-        plot_single_file(
-            data_dict=data_dict,
-            transitions=transitions,
-            file_name=os.path.basename(h5_path),
-            file_type=f_type,
-            axis_opts=axis_opts,
-        )
-
 def plot_multi_file_comparison(
     datasets: list[tuple[str, dict, dict, list[float]]],
     axis_opts: dict,
 ) -> None:
     """
-    Legt beliebig viele HDF5-Messdateien (z.B. 3 Messungen mit 4, 12 und 20 Pins)
-    in einem gemeinsamen Bode-Plot (oder Kombi-Dashboard) uebereinander.
+    Overlays an arbitrary number of HDF5 measurement files in a shared Bode diagram
+    or combined Bode + Nyquist dashboard.
     """
     if not datasets:
         print("[FEHLER] Keine gueltigen Datensaetze zum Vergleichen vorhanden.")
         return
 
     palette = [
-        "#0055cc",  # Blau (z.B. 4 Pins)
-        "#e66000",  # Orange (z.B. 12 Pins)
-        "#1b8a5a",  # Gruen (z.B. 20 Pins)
+        "#0055cc",  # Blue
+        "#e66000",  # Orange
+        "#1b8a5a",  # Green
         "#cc00cc",  # Magenta
-        "#8c564b",  # Braun
+        "#8c564b",  # Brown
         "#008080",  # Teal
     ]
     markers = ["o-", "s--", "^-.", "d:", "v-", "P--"]
@@ -841,7 +787,7 @@ def plot_multi_file_comparison(
         col = palette[idx % len(palette)]
         style = markers[idx % len(markers)]
 
-        # Aktive Pin-Konfiguration automatisch aus den HDF5-Metadaten (Configuration/MUX) holen
+        # Extract active sensor/pin configuration from HDF5 metadata (Configuration/MUX)
         pin_info = ""
         if meta_info.get("type") == "API" and "MUX" in meta_info.get("sections", {}):
             mux_sec = meta_info["sections"]["MUX"]
@@ -857,7 +803,7 @@ def plot_multi_file_comparison(
             phase = d["phase"]
             ph_std = d["phase_std"]
 
-            # Kennwerte bei ~1 kHz (Plateau) und ~1 MHz (Kapazitaet) fuer die Tabelle ermitteln
+            # Extract reference impedance values near 1 kHz and 1 MHz for the comparison table
             idx_1k = int(np.argmin(np.abs(freqs - 1000.0)))
             idx_1m = int(np.argmin(np.abs(freqs - 1000000.0)))
             z_1k = z_mag[idx_1k] if len(z_mag) > 0 else 0.0
@@ -891,7 +837,7 @@ def plot_multi_file_comparison(
     scale_info = "Linear |Z|" if axis_opts["y_scale"] == "linear" else "Log |Z|"
 
     ax_z.set_ylabel(r"Betrag $|Z|$ / $\Omega$")
-    ax_z.set_title(f"Multi-Pin / Mehrdateien-Vergleich ({len(datasets)} Messreihen, {scale_info})")
+    ax_z.set_title(f"Mehrdateien-Vergleich ({len(datasets)} Messreihen, {scale_info})")
     ax_z.grid(True, which="both", linestyle="--", alpha=0.5)
     ax_z.legend(loc="best", fontsize=8.5)
 
@@ -914,13 +860,14 @@ def plot_multi_file_comparison(
 
 
 def main():
+    """Interactive CLI menu for evaluating and comparing HDF5 measurement files."""
     print("\n" + "=" * 75)
     print(" HDF5 AUSWERTUNG, TIMING-ANALYSE & VERGLEICH (API & SCIOSPEC-GUI)")
     print("=" * 75)
     print("Was möchtest du tun?")
     print("  [1] Nur EINE Datei auswerten & plotten (API .h5 ODER Sciospec-GUI .scio5/.h5) [Standard]")
     print("  [2] ZWEI Dateien direkt vergleichen (z.B. API-Messung vs. Sciospec-GUI)")
-    print("  [3] MEHRERE Dateien (z.B. 3 Messreihen: 4 Pins, 12 Pins, 20 Pins) übereinanderlegen")
+    print("  [3] MEHRERE Dateien (z.B. 3 Messreihen) übereinanderlegen")
     mode_choice = input("\nDeine Wahl (1, 2 oder 3) [Standard: 1]: ").strip()
 
     if mode_choice == "3":
@@ -930,7 +877,7 @@ def main():
         datasets = []
         for i in range(1, num_files + 1):
             print(f"\n-> Bitte wähle Datei #{i} von {num_files} aus...")
-            p = select_h5_file(title=f"Datei #{i} von {num_files} wählen (z.B. {i*4} Pins)")
+            p = select_h5_file(title=f"Datei #{i} von {num_files} wählen")
             if not p:
                 print(f"[INFO] Auswahl bei Datei #{i} abgebrochen.")
                 break
@@ -990,6 +937,7 @@ def main():
             file_type=f_type,
             axis_opts=axis_opts,
         )
+
 
 if __name__ == "__main__":
     main()

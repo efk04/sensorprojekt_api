@@ -1,8 +1,8 @@
 """
-plot_templates.py - Visualisierungsvorlagen fuer Impedanzspektroskopie (EIS).
+plot_templates.py - Visualization templates for Electrochemical Impedance Spectroscopy (EIS).
 
-Stellt Vorlagen fuer Bode- (logarithmisch & linear), Nyquist- und
-Impedanz-Frequenz-Diagramme bereit.
+Provides plotting templates for Bode (logarithmic and linear), Nyquist, and
+impedance-over-frequency diagrams.
 """
 
 import math
@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 
 
 class PlotTemplates:
-    """Verwaltet und zeichnet die Diagramme fuer laufende und vergangene Messungen."""
+    """Manages and renders live and historical impedance diagrams."""
 
     def __init__(self):
         self.frequencies = []
@@ -24,7 +24,7 @@ class PlotTemplates:
         self.past_imag = []
 
     def _flatten(self, item_or_list):
-        """Flacht verschachtelte Listen rekursiv ab."""
+        """Recursively flattens nested lists or tuples."""
         flat = []
         if isinstance(item_or_list, (list, tuple)):
             for element in item_or_list:
@@ -34,7 +34,7 @@ class PlotTemplates:
         return flat
 
     def processing_results(self, live_results: dict, current_results: list[dict], len_measurement_queue: int) -> None:
-        """Verarbeitet Rohdaten und fuehrt eine Historie der letzten 5 Sweeps mit."""
+        """Processes raw measurement data and maintains a history of the last 5 sweeps."""
         self.freq_id = self._flatten(live_results.get("id", []))
         self.real = self._flatten(live_results.get("real", []))
         self.imag = self._flatten(live_results.get("imag", []))
@@ -60,7 +60,7 @@ class PlotTemplates:
                         self.past_imag.extend(self._flatten(point["imag"]))
 
     def impedance_frequency(self, live_results: dict, current_results: list[dict], len_measurement_queue: int) -> None:
-        """Zeichnet Real- und Imaginaerteil ueber der Frequenz."""
+        """Plots real and imaginary parts over frequency."""
         self.processing_results(live_results, current_results, len_measurement_queue)
 
         fig = plt.gcf()
@@ -85,7 +85,7 @@ class PlotTemplates:
         fig.tight_layout()
 
     def nyquist(self, live_results: dict, current_results: list[dict], len_measurement_queue: int) -> None:
-        """Zeichnet das Nyquist-Diagramm (Realteil auf X, Imaginaerteil auf Y)."""
+        """Plots the Nyquist diagram (real part on X-axis, imaginary part on Y-axis)."""
         self.processing_results(live_results, current_results, len_measurement_queue)
 
         fig = plt.gcf()
@@ -118,7 +118,7 @@ class PlotTemplates:
         len_measurement_queue: int,
         linear_y: bool = False,
     ) -> None:
-        """Zeichnet das Bode-Diagramm (Betrag |Z| und Phase ueber Frequenz)."""
+        """Plots the Bode diagram (magnitude |Z| and phase over frequency)."""
         self.processing_results(live_results, current_results, len_measurement_queue)
 
         fig = plt.gcf()

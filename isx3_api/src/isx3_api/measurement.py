@@ -1,8 +1,8 @@
 """
-measurement.py - Zentraler Messungs-Orchestrator fuer das Sciospec ISX-3.
+measurement.py - Central measurement orchestrator for the Sciospec ISX-3.
 
-Steuert den Ablauf von Einzel- und Sweep-Messungen, verwaltet die Live-Visualisierung
-und speichert saemtliche Messdaten sowie Metadaten im HDF5-Format.
+Controls single-point and hardware-sweep measurements, manages live visualization,
+and persists all measurement data and metadata in HDF5 format.
 """
 
 from datetime import datetime
@@ -17,24 +17,37 @@ from .commands import ISX3
 from .config_handler import ConfigBuilder, select_config_file
 from .plot_templates import PlotTemplates
 
+# Feature flag: Keep experimental multi-pin ganging disabled until manufacturer firmware register update
+ENABLE_EXPERIMENTAL_MULTIPIN_STACKING = False
+
 
 def parse_mux_sensor_expression(raw_sensors: str) -> tuple[list[int], dict[int, tuple | list[tuple]]]:
     """
-    Parst komplexe MUX-Sensoreingaben.
-    Unterstuetzt:
-    1. Elektroden-Gruppen (Multi-Pin Ganging):
-       '1: CE:1,5,9, RE:2,6,10, WS:3,7,11, WE:4,8,12'
-       (Mehrere Sensoren koennen mit ';' getrennt werden)
-    2. Einfache Custom-Pins mit Doppelpunkt:
+    Parses MUX sensor configuration expressions.
+    Supports:
+    1. Standard sensor ranges and lists:
+       '1-8' or '1, 3, 5'
+    2. Custom 4-pin or 2-pin assignments per sensor (colon syntax):
        '1: 2,5,8,6; 2: 22,22,23,23'
-    3. Standard-Bereiche und Listen:
-       '1-8' oder '1, 3, 5'
+    3. PLACEHOLDER / DEACTIVATED: Electrode Ganging ('1: CE:1,5,9, RE:2,6,10, WS:3,7,11, WE:4,8,12').
+       Currently blocked because hardware-level parallel switching requires a future
+       Sciospec firmware update with direct register programming. The parsing logic
+       is preserved below for future activation.
     """
     active_sensors: list[int] = []
     custom_sensor_pins_map: dict[int, tuple | list[tuple]] = {}
 
-    # Pruefen, ob benannte Elektroden (CE, RE, WS, WE) enthalten sind
+    # Check if named electrode groups (CE, RE, WS, WE) are specified
     if any(lbl in raw_sensors.upper() for lbl in ("CE", "RE", "WS", "WE")):
+        if not ENABLE_EXPERIMENTAL_MULTIPIN_STACKING:
+            raise NotImplementedError(
+                "Multi-Pin-Ansteuerung (CE/RE/WS/WE Gruppen) ist aktuell deaktiviert: "
+                "Laut Hersteller (Sciospec) wird das gleichzeitige Parallelschalten mehrerer Pins "
+                "erst in einem kommenden Firmware-Update ueber direkte Register-Programmierung "
+                "(Platzhalter: ISX3.configure_multipin_registers) unterstuetzt."
+            )
+
+        # --- DEACTIVATED LEGACY MULTI-PIN PARSER (RETAINED FOR FUTURE REGISTER UPDATE) ---
         blocks = [b.strip() for b in raw_sensors.split(";") if b.strip()]
         for blk in blocks:
             m_head = re.match(r"^(\d+)\s*[:=]\s*(.+)$", blk)
@@ -84,7 +97,7 @@ def parse_mux_sensor_expression(raw_sensors: str) -> tuple[list[int], dict[int, 
                     active_sensors.append(s_id)
         return active_sensors, custom_sensor_pins_map
 
-    # Klassische Custom-Pins (z.B. '1: 2,5,8,6') oder gemischte ';' Bloecke
+    # Classic custom pin assignment per sensor (e.g., '1: 2,5,8,6')
     if ":" in raw_sensors or "=" in raw_sensors:
         pattern = re.compile(r"(\d+)\s*[:=]\s*(\d+(?:\s*,\s*\d+){1,3})")
         for match in pattern.finditer(raw_sensors):
@@ -100,7 +113,7 @@ def parse_mux_sensor_expression(raw_sensors: str) -> tuple[list[int], dict[int, 
                     active_sensors.append(s_id)
         return active_sensors, custom_sensor_pins_map
 
-    # Standard-Bereiche wie '1-2' oder '1,3'
+    # Standard sensor ranges such as '1-2' or '1,3'
     for part in raw_sensors.replace(";", ",").split(","):
         part = part.strip()
         if not part:
@@ -115,7 +128,7 @@ def parse_mux_sensor_expression(raw_sensors: str) -> tuple[list[int], dict[int, 
 
 
 class Measurement:
-    """Steuert den gesamten Ablauf einer Impedanz-Messkampagne."""
+    """Controls the entire lifecycle of an impedance measurement campaign."""
 
     def __init__(self):
         self.device = ISX3()
@@ -129,12 +142,12 @@ class Measurement:
         self.current_results = []
         self.manual_stop = False
 
-        # Interaktiven Plot-Modus aktivieren
+        # Enable interactive matplotlib mode
         plt.ion()
         plt.rcParams["keymap.quit"] = []
 
     def create_h5_file(self, mode_prefix: str = "MAIN") -> str:
-        """Erstellt eine leere HDF5-Messdatei im Ordner 'measurements/'."""
+        """Creates an empty HDF5 measurement file inside the 'measurements/' directory."""
         os.makedirs("measurements", exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         self.filename = f"measurement_{mode_prefix}_{timestamp}.h5"
@@ -149,7 +162,7 @@ class Measurement:
     def save_measurement_settings(
         self, config_path: str, mux_enabled: bool = False, device_version: str = "standard"
     ) -> None:
-        """Sichert die gesamte INI-Konfiguration als HDF5-Gruppe Configuration."""
+        """Saves the entire INI configuration into the HDF5 'Configuration' group."""
         group_name = "Configuration"
         ini = configparser.ConfigParser(interpolation=None, inline_comment_prefixes=("#", ";"))
         ini.optionxform = str
@@ -177,7 +190,7 @@ class Measurement:
         icm: int,
         sensor_idx: int = 0,
     ) -> None:
-        """Speichert Realteil, Imaginaerteil, Frequenz und Zeitstempel in HDF5."""
+        """Saves real part, imaginary part, frequency, and timestamps into the HDF5 file."""
         if not results_data.get("id"):
             raise ValueError("Keine gueltigen Messdaten zum Speichern vorhanden.")
 
@@ -217,7 +230,7 @@ class Measurement:
             else:
                 group.create_dataset("imaginary_part", data=results_data["imag"])
 
-            # Hardware-Zeitstempel (Befehl 0x97) sichern
+            # Store hardware timestamps (command 0x97) if present
             hw_ts_list = [t for t in results_data.get("timestamp", []) if t is not None]
             if hw_ts_list:
                 if "hw_timestamp" in group:
@@ -227,7 +240,7 @@ class Measurement:
                     units = [u for u in results_data.get("timestamp_unit", []) if u is not None]
                     ds_ts.attrs["unit"] = units[0] if units else "unknown"
 
-            # Current-Range Rueckmeldung sichern
+            # Store current range feedback if present
             cr_data = [r for r in results_data.get("current_range", []) if r is not None]
             if cr_data:
                 if "current_range" in group:
@@ -240,7 +253,7 @@ class Measurement:
     def start_single_step(
         self, current_setup: dict, measurement_settings: dict
     ) -> tuple[dict, float]:
-        """Fuehrt eine einzelne Punktmessung aus."""
+        """Executes a single discrete frequency point measurement."""
         self.device.set_frequency_setup(current_setup)
 
         number_of_spectra = int(current_setup["number_of_spectra"])
@@ -260,7 +273,7 @@ class Measurement:
         return results, timestamp
 
     def update_live_plot(self, results: dict, current_setup: dict, current_results: list[dict], len_queue: int) -> None:
-        """Aktualisiert die Diagrammansicht."""
+        """Updates the live matplotlib figure during a measurement run."""
         match self.plot_type:
             case "impedance_frequency":
                 self.plot_templates.impedance_frequency(results, current_results, len_queue)
@@ -274,7 +287,7 @@ class Measurement:
         plt.pause(0.01)
 
     def measurement(self, config_path: str | None = None) -> str | None:
-        """Hauptmethode: Fuehrt den gesamten Messzyklus aus."""
+        """Main entry method: executes the complete measurement campaign."""
         if not config_path:
             config_path = select_config_file()
             if not config_path:

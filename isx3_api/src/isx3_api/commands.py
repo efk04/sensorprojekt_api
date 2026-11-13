@@ -1,9 +1,10 @@
 """
-commands.py - Treiber- und Kommunikationsschicht fuer das Sciospec ISX-3.
+commands.py - Driver and low-level communication layer for the Sciospec ISX-3.
 
-Enthaelt die Low-Level-Binaerkommunikation (Befehls-Frames mit ACK-Quittierung),
-die Frontend- und Frequenzsteuerung fuer Standard- und Medical-Modelle sowie den
-automatischen System-Baseline-Drift-Check fuer den internen 2 kΩ Referenzpfad.
+Provides binary frame communication with ACK/NACK verification, analog frontend
+and frequency sweep setup for both Standard and Medical Research models, a
+placeholder for future register-based multi-pin ganging, and the automated
+system baseline drift check on the internal 2 kOhm reference path.
 """
 
 import math
@@ -11,9 +12,9 @@ import struct
 import time
 import serial
 import serial.tools.list_ports
-from typing import Any, Dict, Tuple, Optional
+from typing import Any
 
-# Definition der ISX-3 Antwort- und Statuscodes
+# Definition of ISX-3 response and status codes
 MSG_DICT = {
     0x01: "Frame-NACK: Ungueltige Syntax",
     0x02: "Kommunikations-Timeout (weniger Daten empfangen als erwartet)",
@@ -30,15 +31,15 @@ MSG_DICT = {
 
 
 class ISX3:
-    """Kapselt alle Steuerbefehle und das Binaerprotokoll des Sciospec ISX-3."""
+    """Encapsulates all control commands and the binary protocol of the Sciospec ISX-3."""
 
-    # Protokoll-Steuerbytes fuer Rueckmeldungen
+    # Protocol control bytes for device acknowledgments
     ACK_TAG = 0x18
     ACK_SUCCESS = 0x83
     NACK_SYNTAX = 0x81
     NACK_NOT_RECOGNIZED = 0x82
 
-    # Befehls-Tags (Command Identifiers)
+    # Command tags (Command Identifiers)
     CMD_SETUP_FRONTEND = 0xB0
     CMD_GET_FRONTEND = 0xB1
     CMD_SETUP_EXTENSION = 0xB2
@@ -48,8 +49,11 @@ class ISX3:
     CMD_GET_SETUP = 0xB7
     CMD_MEASURE = 0xB8
 
+    # Feature flag: Keep legacy multi-pin 0xB0 stacking disabled until firmware register update is available
+    ENABLE_EXPERIMENTAL_MULTIPIN_STACKING = False
+
     def __init__(self):
-        """Initialisiert die Geraeteschnittstelle und interne Statusvariablen."""
+        """Initializes the device interface and internal state variables."""
         self.device = None
         self.serial_protocol = None
         self.print_msg = True
@@ -57,20 +61,20 @@ class ISX3:
         self.device_version = "standard"
 
     def is_port_available(self, port: str) -> bool:
-        """Prueft, ob der angegebene serielle Port im Betriebssystem existiert."""
+        """Checks whether the specified serial port exists on the operating system."""
         available_ports = [p.device for p in serial.tools.list_ports.comports()]
         return port in available_ports
 
     def list_available_ports(self) -> list[str]:
-        """Gibt eine Liste aller erkannten COM-Ports zurueck."""
+        """Returns a list of all detected serial COM ports."""
         return [p.device for p in serial.tools.list_ports.comports()]
 
     def connect_device_fs(self, settings: dict):
         """
-        Oeffnet die serielle USB-Verbindung zum ISX-3 Geraet.
-        
+        Opens the serial USB connection to the ISX-3 device.
+
         Args:
-            settings: Dictionary mit 'port', 'baudrate' und 'device_version'.
+            settings: Dictionary containing 'port', 'baudrate', and 'device_version'.
         """
         port = settings.get("port", "COM12")
         baudrate = int(settings.get("baudrate", 115200))
@@ -102,13 +106,13 @@ class ISX3:
 
     def _send_command(self, cmd_tag: int, data: bytes, timeout: float = 3.0) -> None:
         """
-        Sendet ein Datenpaket im Sciospec-Frameformat: [Tag] [Laenge] [Payload] [Tag]
-        und wartet auf die Quittierung (ACK).
+        Sends a data packet using the Sciospec frame format: [Tag] [Length] [Payload] [Tag]
+        and waits for the device acknowledgment (ACK).
         """
         if not self.device or not self.device.is_open:
             raise ConnectionError("Keine aktive serielle Verbindung zum ISX-3 vorhanden.")
 
-        # Veraltete Bytes im Eingangspuffer verwerfen
+        # Discard stale bytes in the input buffer before sending a new command
         if self.device.in_waiting > 0:
             self.device.read(self.device.in_waiting)
 
@@ -123,7 +127,7 @@ class ISX3:
         self._wait_for_ack(cmd_tag, timeout=timeout)
 
     def _wait_for_ack(self, original_cmd_tag: int, timeout: float = 3.0) -> None:
-        """Liest die Geraeteantwort ein und prueft, ob ein gueltiges ACK empfangen wurde."""
+        """Reads the device response and verifies that a valid ACK frame was received."""
         start_time = time.time()
         while time.time() - start_time < timeout:
             tag_byte = self.device.read(1)
@@ -132,7 +136,7 @@ class ISX3:
 
             tag = tag_byte[0]
 
-            # Empfang eines Quittierungs-Frames (0x18)
+            # Process acknowledgment frame (0x18)
             if tag == self.ACK_TAG:
                 rest = self.device.read(3)
                 if len(rest) < 3:
@@ -154,7 +158,7 @@ class ISX3:
                 status_text = MSG_DICT.get(status, f"Unbekannter Status-Code 0x{status:02X}")
                 raise ValueError(f"Unerwarteter Status empfangen: {status_text}")
 
-            # Asynchrone System-Nachrichten oder noch nachlaufende Messframes (0xB8) konsumieren
+            # Consume asynchronous system messages or trailing measurement frames (0xB8)
             elif tag in (
                 0x1D,
                 self.CMD_MEASURE,
@@ -176,8 +180,8 @@ class ISX3:
 
     def stop_measurement(self) -> None:
         """
-        Sendet den expliziten Stop-Befehl (0xB8 0x01 0x00 0xB8) an das ISX-3,
-        damit das Geraet garantiert den Messmodus verlaesst, und leert verbleibende Messframes.
+        Sends the explicit stop command (0xB8 0x01 0x00 0xB8) to the ISX-3 to ensure
+        the device exits measurement mode, and flushes any remaining measurement frames.
         """
         if not self.device or not self.device.is_open:
             return
@@ -186,7 +190,7 @@ class ISX3:
             self.device.write(stop_frame)
             self.device.flush()
             time.sleep(0.15)
-            # Alle eventuell noch nachlaufenden Bytes und das Stop-ACK aus dem Puffer leeren
+            # Flush any trailing measurement bytes and the stop ACK from the input buffer
             while self.device.in_waiting > 0:
                 self.device.read(self.device.in_waiting)
                 time.sleep(0.05)
@@ -195,7 +199,7 @@ class ISX3:
             print(f"[HINWEIS] Fehler beim Stoppen der Messung: {e}")
 
     def software_reset(self) -> None:
-        """Sendet den Software-Reset (Befehl 0xA1) an das ISX-3."""
+        """Sends the software reset command (0xA1) to the ISX-3."""
         if not self.device or not self.device.is_open:
             print("[WARNUNG] Kein Geraet verbunden, Reset uebersprungen.")
             return
@@ -210,9 +214,9 @@ class ISX3:
 
     def set_options(self, settings: dict) -> None:
         """
-        Konfiguriert optionale Frame-Erweiterungen (0x97) und Inter-Sweep Synchronisation.
-        Beim Medical Research ISX-3 wird 0x97 uebersprungen bzw. per try-except geschuetzt,
-        um Timeouts oder NACK-Blockaden bei inkompatibler Firmware zu verhindern.
+        Configures optional frame extensions (0x97) and inter-sweep synchronization.
+        In Medical Research ISX-3 mode, inactive 0x97 commands are skipped or protected
+        via try-except to prevent ACK timeouts or NACK command lockups.
         """
         self.device_version = str(settings.get("device_version", self.device_version)).strip().lower()
         timestamp_mode = int(settings.get("timestamp_mode", 0))
@@ -221,7 +225,7 @@ class ISX3:
         bias_voltage_v = float(settings.get("bias_voltage_v", 0.0))
         sync_time_us = int(settings.get("sync_time_us", 0))
 
-        # Sicherstellen, dass das Geraet vor dem Options-Setup nicht mehr im Measure-Modus haengt
+        # Ensure the device is not stuck in measurement mode before applying options
         self.stop_measurement()
 
         if "medical" not in self.device_version or timestamp_mode > 0 or enable_current_range_output:
@@ -247,7 +251,7 @@ class ISX3:
         else:
             print("[INFO] Medical-Modus: Ueberspringe inaktive 0x97-Optionen (verhindert ACK-Timeout).")
 
-        # DC-Bias wird nur am BNC-Hauptport genutzt
+        # DC bias is only used on the main front BNC port
         if not settings.get("mux_enabled", False):
             try:
                 bias_payload = bytes([0x33]) + struct.pack(">f", float(bias_voltage_v))
@@ -256,7 +260,7 @@ class ISX3:
             except Exception as e:
                 print(f"[HINWEIS] DC-Bias Setup uebersprungen: {e}")
 
-        # Inter-Sweep Pause (0xB9)
+        # Inter-sweep pause (0xB9)
         if sync_time_us > 0 or "medical" not in self.device_version:
             try:
                 sync_payload = struct.pack(">I", int(sync_time_us))
@@ -271,7 +275,7 @@ class ISX3:
         working_sense_port: int,
         working_port: int,
     ) -> None:
-        """Schaltet den externen Erweiterungsport bei Standard ISX-3 Geraeten (Befehl 0xB2)."""
+        """Switches the external extension port on Standard ISX-3 devices (command 0xB2)."""
         pins = (
             int(counter_port),
             int(reference_port),
@@ -279,6 +283,34 @@ class ISX3:
             int(working_port),
         )
         self._send_command(self.CMD_SETUP_EXTENSION, bytes(pins))
+
+    def configure_multipin_registers(
+        self,
+        ce_pins: list[int],
+        re_pins: list[int],
+        ws_pins: list[int],
+        we_pins: list[int],
+        mux_channel: int = 3,
+    ) -> None:
+        """
+        PLACEHOLDER FOR FUTURE FIRMWARE UPDATE (Register-Based Multi-Pin Ganging):
+        According to the manufacturer (Sciospec), simultaneous parallel switching of
+        multiple multiplexer channels onto a single electrode path (CE, RE, WS, WE)
+        is not supported by the current 0xB0 command stack. A future firmware update
+        will provide direct hardware register programming (bitmask addressing) to close
+        arbitrary relay combinations simultaneously.
+
+        Once the manufacturer releases the register specification:
+        1. Convert ce_pins, re_pins, ws_pins, we_pins into 32-bit/64-bit relay bitmasks.
+        2. Pack the register address and bitmask payload into the new command tag.
+        3. Transmit via self._send_command(...) and verify ACK.
+        """
+        raise NotImplementedError(
+            "Multi-Pin-Parallelschaltung (Electrode Ganging) wird von der aktuellen ISX-3 Firmware "
+            "hardwareseitig noch nicht unterstuetzt. Ein zukuenftiges Firmware-Update des Herstellers "
+            "wird hierfuer eine direkte Register-Programmierung bereitstellen (Platzhalter: "
+            "ISX3.configure_multipin_registers)."
+        )
 
     def route_mux_sensor(
         self,
@@ -288,12 +320,17 @@ class ISX3:
         **kwargs: Any,
     ) -> tuple[int, int, int, int] | list[tuple[int, int, int, int]]:
         """
-        Berechnet Pin-Kanalzuordnungen fuer MUX32/64 und schaltet das Routing um.
-        Unterstuetzt sowohl einzelne 4er-Pin-Tupel als auch Listen von Pin-Tupeln fuer
-        paralleles Zusammenschalten mehrerer Pins (z.B. '1: CE:1,5,9, RE:2,6,10, WS:3,7,11, WE:4,8,12').
+        Calculates pin channel assignments for MUX32/64 and updates routing state.
+        Note: Experimental multi-pin list routing is retained in code for reference
+        but blocked unless ENABLE_EXPERIMENTAL_MULTIPIN_STACKING is explicitly enabled.
         """
         if custom_pins is not None:
             if isinstance(custom_pins, list):
+                if not self.ENABLE_EXPERIMENTAL_MULTIPIN_STACKING:
+                    # Trigger the register placeholder error when multi-pin lists are passed
+                    self.configure_multipin_registers([], [], [], [])
+
+                # --- DEACTIVATED LEGACY MULTI-PIN STACKING (RETAINED FOR REFERENCE) ---
                 pin_tuples = [tuple(int(x) for x in t) for t in custom_pins]
                 self.active_mux_pins = pin_tuples if len(pin_tuples) > 1 else pin_tuples[0]
                 ce_s = ",".join(str(t[0]) for t in pin_tuples)
@@ -325,7 +362,7 @@ class ISX3:
         return ce, re, ws, we
 
     def clear_mux_routing(self) -> None:
-        """Stoppt eventuelle Restmessungen und setzt das aktive Multiplexer-Routing zurueck."""
+        """Stops any residual measurements and resets the active multiplexer routing."""
         self.active_mux_pins = None
         if self.device and self.device.is_open:
             self.stop_measurement()
@@ -343,9 +380,8 @@ class ISX3:
         switch_delay: float = 0.02,
     ) -> None:
         """
-        Konfiguriert das analoge Frontend ueber Befehl 0xB0.
-        Unterstuetzt bei Multi-Pin-Zuweisungen (Liste von Tupeln) das gestapelte Schalten
-        mehrerer Relais-Pfade ohne dazwischenliegendes Reset (FF FF FF).
+        Configures the analog frontend via command 0xB0.
+        Distinguishes between the 15-byte Medical protocol and the 4-byte Standard protocol (with 0xB2).
         """
         if int(current_range) not in (0, 1, 2, 4, 6):
             print(f"[WARNUNG] Ungueltiger current_range={current_range}, setze auf 2 (±100 µA).")
@@ -354,12 +390,14 @@ class ISX3:
         if int(voltage_range) not in (1, 2):
             voltage_range = 1
 
-        # Altes Setup einmalig vor neuer Zuweisung komplett leeren
+        # Clear previous frontend setup once before applying new assignment
         self._send_command(self.CMD_SETUP_FRONTEND, bytes([0xFF, 0xFF, 0xFF]))
 
-        # Pin-Liste normalisieren (Einzeltupel -> Liste mit 1 Tupel, Liste -> Liste mit N Tupeln)
+        # Normalize pin configuration
         if self.active_mux_pins is not None:
             if isinstance(self.active_mux_pins, list):
+                if not self.ENABLE_EXPERIMENTAL_MULTIPIN_STACKING:
+                    self.configure_multipin_registers([], [], [], [])
                 pin_tuples = self.active_mux_pins
             else:
                 pin_tuples = [self.active_mux_pins]
@@ -371,7 +409,8 @@ class ISX3:
 
             if pin_tuples:
                 chan_type = int(measurement_channel) if int(measurement_channel) in (2, 3) else 3
-                # Jedes Pin-Tupel nacheinander auf den internen Relais-Stack schalten
+                # In normal operation pin_tuples contains exactly 1 tuple (ce, re, ws, we).
+                # Legacy stacking loop is preserved for reference.
                 for ce, re, ws, we in pin_tuples:
                     if measurement_mode == 1:
                         ch_settings = struct.pack(">BHBH", chan_type, ce, chan_type, we)
@@ -399,7 +438,7 @@ class ISX3:
 
             time.sleep(max(0.08, float(switch_delay)))
         else:
-            # Standard-Modus: Kurzes 4-Byte Frontend + Routing ueber Befehl 0xB2
+            # Standard mode: 4-byte frontend command + routing via command 0xB2
             fe_payload = struct.pack(
                 ">BBBB", int(measurement_mode), int(measurement_channel), int(current_range), int(voltage_range)
             )
@@ -419,7 +458,7 @@ class ISX3:
         excitation_type: int,
         frequency_hz: float = 100000.0,
     ) -> bytes:
-        """Erstellt die binaren Extended Options (EOPs) fuer das Frequenz-Setup (0xB6)."""
+        """Builds the binary Extended Options (EOPs) for the frequency setup (0xB6)."""
         eops = b""
         if point_delay_us > 0:
             eops += bytes([0x01]) + struct.pack(">I", int(point_delay_us))
@@ -430,7 +469,7 @@ class ISX3:
         return eops
 
     def set_frequency_setup(self, current_setup: dict) -> None:
-        """Konfiguriert einen einzelnen Frequenzpunkt fuer diskrete Messungen (0xB6 Sub 0x02)."""
+        """Configures a single discrete frequency point (0xB6 Sub 0x02)."""
         self.device_version = str(current_setup.get("device_version", self.device_version)).strip().lower()
         measurement_mode = int(current_setup.get("measurement_mode", 2))
         measurement_channel = int(current_setup.get("measurement_channel", 1))
@@ -441,7 +480,7 @@ class ISX3:
         precision = float(current_setup.get("precision", 1.0))
 
         raw_amplitude = float(current_setup.get("amplitude", 0.0001))
-        # Im Medical-Modus: Automatische Halbierung von App auf Ap fuer die Firmware
+        # In Medical mode: automatically halve peak-to-peak (App/Vpp) to peak (Ap/Vp) for firmware
         amplitude = raw_amplitude * 0.5 if "medical" in self.device_version else raw_amplitude
 
         excitation_type = int(current_setup.get("excitation_type", 2))
@@ -474,7 +513,7 @@ class ISX3:
         global_settings: dict,
         switch_delay_s: float = 0.10,
     ) -> None:
-        """Konfiguriert hardware-gesteuerte Multi-Block Frequenzsweeps (0xB6 Sub 0x03)."""
+        """Configures hardware-controlled multi-block frequency sweeps (0xB6 Sub 0x03)."""
         self.device_version = str(global_settings.get("device_version", self.device_version)).strip().lower()
         measurement_mode = int(global_settings.get("measurement_mode", 2))
         measurement_channel = int(global_settings.get("measurement_channel", 1))
@@ -522,7 +561,7 @@ class ISX3:
     def start_measurement(
         self, spectra: int, id: int, measurement_settings: dict, expected_frames: int | None = None
     ) -> dict:
-        """Startet den Messlauf ueber Befehl 0xB8, liest die empfangenen Frames ein und beendet den Messmodus sauber."""
+        """Starts the measurement run via command 0xB8, reads incoming frames, and cleanly stops measurement mode."""
         if not self.device or not self.device.is_open:
             print("[FEHLER] Kein Geraet verbunden.")
             return {
@@ -566,13 +605,13 @@ class ISX3:
                 measurement_settings=measurement_settings,
             )
         finally:
-            # Garantiert, dass das ISX-3 nach dem Auslesen (auch bei Multi-Pin-Stacks) den Measure-Modus verlaesst!
+            # Guarantee that the ISX-3 exits measurement mode after reading frames
             self.stop_measurement()
 
     def read_measurement_data(
         self, spectra: int, timeout: float, measurement_settings: dict
     ) -> dict:
-        """Parst Nutzdatenframes (0xB8) aus dem seriellen Datenstrom."""
+        """Parses measurement data frames (0xB8) from the serial byte stream."""
         results = {
             "id": [], "real": [], "imag": [], "timestamp": [],
             "timestamp_unit": [], "current_range": [], "frequencies": [],
@@ -675,8 +714,8 @@ class ISX3:
         self, port: str = "COM12", baudrate: int = 115200, mux_channel: int = 3, cycles: int = 5, freq_hz: float = 1000.0
     ) -> dict:
         """
-        Fuehrt eine thermische Stabilitaetspruefung auf dem internen 2 kΩ Referenzwiderstand (Pins 22,22,23,23) aus.
-        Misst den Widerstand mehrfach hintereinander und bewertet den Drift in Prozent (Grenze <= 0.2%).
+        Performs a thermal stability check on the internal 2 kOhm reference resistor (pins 22,22,23,23).
+        Measures impedance repeatedly and evaluates drift percentage (threshold <= 0.2%).
         """
         settings = {
             "port": port,
@@ -695,7 +734,7 @@ class ISX3:
             }
 
         readings = []
-        pins = (22, 22, 23, 23)  # Interner 2 kΩ Praezisionswiderstand auf MUX-Port 3
+        pins = (22, 22, 23, 23)  # Internal 2 kOhm precision resistor on MUX port 3
 
         try:
             print(f"\n[BASELINE-CHECK] Starte Stabilitaetspruefung auf 2 kΩ Referenz ({cycles} Zyklen @ {freq_hz:g} Hz)...")
@@ -718,7 +757,7 @@ class ISX3:
             self.set_frequency_setup(setup)
 
             for i in range(cycles):
-                raw = self.start_measurement(spectra=1, id=i+1, measurement_settings=settings, expected_frames=1)
+                raw = self.start_measurement(spectra=1, id=i + 1, measurement_settings=settings, expected_frames=1)
                 if raw.get("real") and raw.get("imag"):
                     re = raw["real"][0]
                     im = raw["imag"][0]
