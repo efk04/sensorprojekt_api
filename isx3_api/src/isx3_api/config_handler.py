@@ -2,7 +2,10 @@
 config_handler.py - Configuration parser, validator, and measurement queue generator for the ISX-3.
 
 Reads INI configuration files, resolves SI prefixes ('100u', '1M', '100k'), and builds
-the sequential queue of frequency measurement steps.
+the sequential queue of frequency measurement steps for:
+- 'sweep': Hardware-controlled block sweep (0xB6 Sub 0x03)
+- 'point_list': Python-controlled point-by-point sweep using the block table (0xB6 Sub 0x02 per point)
+- 'single': Discrete single frequency or comma-separated frequency list (0xB6 Sub 0x02)
 """
 
 import configparser
@@ -263,7 +266,11 @@ class ConfigParser:
     def _parse_frequency_setup(self) -> FrequencySetupConfig:
         sec = self._find_section("FrequencySetup")
         raw_frequencies = self.parser.get(sec, "frequency_hz", fallback="1000.0")
-        parsed_frequencies = [parse_frequency_input(item) for item in raw_frequencies.split(",") if item.strip()]
+        parsed_frequencies = [
+            parse_frequency_input(item)
+            for item in raw_frequencies.replace(";", ",").split(",")
+            if item.strip()
+        ]
         if not parsed_frequencies:
             parsed_frequencies = [1000.0]
 
@@ -355,10 +362,45 @@ class ConfigBuilder:
         return self.settings
 
     def parse_frequency_blocks(self) -> list[dict]:
-        """Reads frequency blocks including block-specific excitation settings from the INI file."""
+        """
+        Reads frequency blocks from the INI file.
+        If mode == 'single', ignores the [FrequencyBlocks] table and builds 1-point
+        blocks from 'frequency_hz' in [FrequencySetup].
+        For 'sweep' and 'point_list', uses the [FrequencyBlocks] table.
+        """
         self.settings = self.get_settings_from_config()
         ini = self.parser.parser
         blocks = []
+        mode = str(self.settings.get("mode", "sweep")).strip().lower()
+
+        # CheckSingle mode first so discrete single-point measurements are not overridden by [FrequencyBlocks]
+        if mode == "single":
+            raw_freqs = self.settings.get("frequency_hz", [1000.0])
+            if isinstance(raw_freqs, list):
+                freqs = [parse_frequency_input(f) for f in raw_freqs]
+            else:
+                freqs = [
+                    parse_frequency_input(item)
+                    for item in str(raw_freqs).replace(";", ",").split(",")
+                    if item.strip()
+                ]
+            if not freqs:
+                freqs = [1000.0]
+
+            for f in freqs:
+                blocks.append({
+                    "start_frequency_hz": f,
+                    "stop_frequency_hz": f,
+                    "count": 1,
+                    "scale": "linear",
+                    "precision": parse_precision_input(self.settings.get("precision", 1.0)),
+                    "amplitude": float(self.settings.get("amplitude", 0.0001)),
+                    "excitation_type": int(self.settings.get("excitation_type", 2)),
+                    "point_delay_ms": float(self.settings.get("point_delay_ms", 20.0)),
+                    "point_delay_us": int(float(self.settings.get("point_delay_ms", 20.0)) * 1000.0),
+                    "phase_sync": int(bool(self.settings.get("phase_sync", False))),
+                })
+            return blocks
 
         block_indices = []
         if ini.has_section("FrequencyBlocks"):
@@ -406,43 +448,22 @@ class ConfigBuilder:
                 })
             return blocks
 
-        mode = str(self.settings.get("mode", "sweep")).strip().lower()
-        if mode == "single":
-            raw_freqs = self.settings.get("frequency_hz", [1000.0])
-            if isinstance(raw_freqs, list):
-                freqs = [parse_frequency_input(f) for f in raw_freqs]
-            else:
-                freqs = [parse_frequency_input(item) for item in str(raw_freqs).split(",") if item.strip()]
-            for f in freqs:
-                blocks.append({
-                    "start_frequency_hz": f,
-                    "stop_frequency_hz": f,
-                    "count": 1,
-                    "scale": "linear",
-                    "precision": parse_precision_input(self.settings.get("precision", 1.0)),
-                    "amplitude": float(self.settings.get("amplitude", 0.0001)),
-                    "excitation_type": int(self.settings.get("excitation_type", 2)),
-                    "point_delay_ms": float(self.settings.get("point_delay_ms", 20.0)),
-                    "point_delay_us": int(float(self.settings.get("point_delay_ms", 20.0)) * 1000.0),
-                    "phase_sync": int(bool(self.settings.get("phase_sync", False))),
-                })
-        else:
-            start_f = parse_frequency_input(self.settings.get("start_frequency_hz", 100.0))
-            stop_f = parse_frequency_input(self.settings.get("stop_frequency_hz", 10000000.0))
-            count = max(1, int(self.settings.get("count", 101)))
-            scale = str(self.settings.get("scale", "logarithmic")).strip().lower()
-            blocks.append({
-                "start_frequency_hz": start_f,
-                "stop_frequency_hz": stop_f,
-                "count": count,
-                "scale": scale,
-                "precision": parse_precision_input(self.settings.get("precision", 1.0)),
-                "amplitude": float(self.settings.get("amplitude", 0.0001)),
-                "excitation_type": int(self.settings.get("excitation_type", 2)),
-                "point_delay_ms": float(self.settings.get("point_delay_ms", 20.0)),
-                "point_delay_us": int(float(self.settings.get("point_delay_ms", 20.0)) * 1000.0),
-                "phase_sync": int(bool(self.settings.get("phase_sync", False))),
-            })
+        start_f = parse_frequency_input(self.settings.get("start_frequency_hz", 100.0))
+        stop_f = parse_frequency_input(self.settings.get("stop_frequency_hz", 10000000.0))
+        count = max(1, int(self.settings.get("count", 101)))
+        scale = str(self.settings.get("scale", "logarithmic")).strip().lower()
+        blocks.append({
+            "start_frequency_hz": start_f,
+            "stop_frequency_hz": stop_f,
+            "count": count,
+            "scale": scale,
+            "precision": parse_precision_input(self.settings.get("precision", 1.0)),
+            "amplitude": float(self.settings.get("amplitude", 0.0001)),
+            "excitation_type": int(self.settings.get("excitation_type", 2)),
+            "point_delay_ms": float(self.settings.get("point_delay_ms", 20.0)),
+            "point_delay_us": int(float(self.settings.get("point_delay_ms", 20.0)) * 1000.0),
+            "phase_sync": int(bool(self.settings.get("phase_sync", False))),
+        })
         return blocks
 
     def generate_measurement_queue(self) -> list[dict]:

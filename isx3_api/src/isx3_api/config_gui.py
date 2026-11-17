@@ -2,8 +2,10 @@
 config_gui.py - Graphical configuration window for the Sciospec ISX-3.
 
 Provides dynamic unit switching (Standard: Peak A/V vs. Medical: Peak-to-Peak App/Vpp),
-frequency block tables, MUX pin addressing help, unsaved change detection prior to
-measurement start, and the synchronous system baseline drift check.
+device-dependent MUX port selection (Standard: only External MUX Port 2; Medical: External
+Port 2 & Internal Port 3), selectable frequency execution modes ('sweep', 'point_list', 'single'),
+frequency block tables, unsaved change detection prior to measurement start, and the
+synchronous system baseline drift check.
 """
 
 import os
@@ -36,6 +38,12 @@ class ConfigGUI:
         "medical (Medical Research ISX-3)",
     ]
 
+    FREQ_EXEC_MODES = [
+        "sweep (Hardware-Block-Sweep via 0xB6 Sub 0x03 - Schnellster Modus)",
+        "point_list (Python-Einzelpunkt-Liste via 0xB6 Sub 0x02 - Bereich einzeln übergeben)",
+        "single (Diskrete Einzelfrequenz / Komma-Liste via 0xB6 Sub 0x02)",
+    ]
+
     EXC_VALUES_STANDARD = [
         "1 (Voltage / Spannung in V Peak)",
         "2 (Current / Strom in A Peak)",
@@ -45,7 +53,7 @@ class ConfigGUI:
         "2 (Current / Strom in App)",
     ]
 
-    # According to manual chapter 8.5.5 (0xB0), only values 1 and 2 are valid for Voltage Range
+    # According to manual chapter 6.5.5 / 8.5.5 (0xB0), only values 1 and 2 are valid for Voltage Range
     VR_VALUES_STANDARD = [
         "1 (±1.0 V Peak Default)",
         "2 (±0.09 V / ±90 mV Peak High Gain)",
@@ -71,11 +79,20 @@ class ConfigGUI:
         "6 (±10 nA / 100 MΩ Range)",
     ]
 
+    # MUX channel options: Standard only supports external MUX (Port 2); Medical supports Port 2 and Port 3
+    MUX_CHAN_STANDARD = [
+        "2 (ext. Mux32 / ExtPort)",
+    ]
+    MUX_CHAN_MEDICAL = [
+        "2 (ext. Mux32 / ExtPort)",
+        "3 (int. Mux32 / InternalMux)",
+    ]
+
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("Sciospec ISX-3 - Professioneller Mess-Manager (Standard & Medical)")
-        self.root.geometry("1120x910")
-        self.root.minsize(1000, 800)
+        self.root.geometry("1120x930")
+        self.root.minsize(1000, 820)
 
         self.config_dir = os.path.abspath("config")
         os.makedirs(self.config_dir, exist_ok=True)
@@ -91,6 +108,15 @@ class ConfigGUI:
     def _is_medical(self) -> bool:
         """Checks whether the Medical Research ISX-3 mode is currently selected."""
         return "medical" in self.device_version_var.get().lower()
+
+    def _get_freq_mode_code(self) -> str:
+        """Extracts 'sweep', 'point_list', or 'single' from the execution mode combobox."""
+        val = self.freq_mode_var.get().strip().lower()
+        if val.startswith("point_list"):
+            return "point_list"
+        if val.startswith("single"):
+            return "single"
+        return "sweep"
 
     def _get_form_state_snapshot(self) -> tuple:
         """Creates an immutable snapshot of all current GUI input fields and frequency blocks."""
@@ -109,6 +135,8 @@ class ConfigGUI:
             self.mux_mode_var.get().strip(),
             self.mux_chan_var.get(),
             self.mux_delay_var.get().strip(),
+            self.freq_mode_var.get(),
+            self.single_freq_var.get().strip(),
             self.exc_type_var.get(),
             self.amp_var.get().strip(),
             self.curr_range_var.get(),
@@ -218,9 +246,6 @@ live_plot_mode = point
             "   • Beispiel: '1: 2,5,8,6' oder '22: 22,22,23,23'\n"
             "   • Mehrere Sensoren mit Semikolon trennen: '1: 2,5,8,6; 2: 22,22,23,23'"
         )
-        # --- HIDDEN PLACEHOLDER FOR FUTURE FIRMWARE REGISTER UPDATE ---
-        # "3. Parallelschalten mehrerer Elektroden (Multi-Pin Ganging via Register):\n"
-        # "   • '1: CE:1,5,9, RE:2,6,10, WS:3,7,11, WE:4,8,12'\n"
         messagebox.showinfo("MUX Pin-Belegung", help_text, parent=self.root)
 
     def _show_device_comparison_info(self) -> None:
@@ -232,11 +257,14 @@ live_plot_mode = point
             "   • Standard ISX-3: Eingabe als echter Spitzenwert (Peak: A bzw. V).\n"
             "   • Medical Research ISX-3: Eingabe als Spitze-Spitze (App bzw. Vpp).\n"
             "     -> Die API halbiert App / Vpp automatisch fuer die Hardware!\n\n"
-            "2. SPANNUNGSMESSBEREICHE (Voltage Range in 0xB0):\n"
-            "   • Standard: 1 = ±1.0 V Peak | 2 = ±0.09 V (±90 mV) Peak\n"
-            "   • Medical: 1 = ±2.0 Vpp | 2 = ±180 mVpp\n\n"
-            "3. SYSTEM-BASELINE-DRIFT-CHECK:\n"
-            "   • Ueberprueft die thermische Stabilitaet des internen 2 kΩ Referenzpfads auf MUX-Port 3."
+            "2. FREQUENZ- & SWEEP-MODI (fuer Timing-Benchmarks):\n"
+            "   • sweep: Hardware-Block-Sweep (0xB6 Sub 0x03) -> Gerät sweept autonom.\n"
+            "   • point_list: Python berechnet die Frequenzliste aus den Bloecken und\n"
+            "     uebergibt jeden Punkt einzeln via 0xB6 Sub 0x02 an das ISX-3.\n"
+            "   • single: Misst eine diskrete Einzelfrequenz (oder Komma-Liste).\n\n"
+            "3. MULTIPLEXER-ROUTING (0xB0 vs. 0xB2):\n"
+            "   • Standard ISX-3: Besitzt nur Main Port (1) und externen MUX (Port 2 via 0xB2).\n"
+            "   • Medical Research ISX-3: Unterstuetzt ext. MUX (Port 2) & int. MUX (Port 3) via 15-Byte 0xB0."
         )
         messagebox.showinfo("Info: Standard vs. Medical Einstellungen", info_text, parent=self.root)
 
@@ -402,11 +430,11 @@ live_plot_mode = point
         ttk.Combobox(self.frame_mux, textvariable=self.mux_mode_var, values=["2", "4"], width=5, state="readonly").grid(row=0, column=4, padx=5)
 
         ttk.Label(self.frame_mux, text="MUX-Port (0xB0):").grid(row=0, column=5, sticky=tk.W, padx=8)
-        self.mux_chan_var = tk.StringVar(value="2 (ext. Mux32 / ExtPort)")
+        self.mux_chan_var = tk.StringVar(value=self.MUX_CHAN_STANDARD[0])
         self.mux_chan_combo = ttk.Combobox(
             self.frame_mux,
             textvariable=self.mux_chan_var,
-            values=["2 (ext. Mux32 / ExtPort)", "3 (int. Mux32 / InternalMux)"],
+            values=self.MUX_CHAN_STANDARD,
             width=24,
             state="readonly",
         )
@@ -416,9 +444,34 @@ live_plot_mode = point
         self.mux_delay_var = tk.StringVar(value="0.10")
         ttk.Entry(self.frame_mux, textvariable=self.mux_delay_var, width=7).grid(row=0, column=8, padx=5)
 
-        # TAB 1: Frequency blocks table
-        block_frame = ttk.LabelFrame(tab_main, text=" Frequenz-Bloecke & Block-Spezifische Anregung (0xB6 0x03) ", padding=8)
+        # TAB 1: Frequency execution mode & frequency blocks table
+        block_frame = ttk.LabelFrame(
+            tab_main,
+            text=" Frequenz-Steuerung: Hardware-Block-Sweep (0xB6 0x03) vs. Python-Einzelpunkt-Übergabe (0xB6 0x02) ",
+            padding=8,
+        )
         block_frame.pack(fill=tk.BOTH, expand=True, pady=4)
+
+        exec_mode_bar = ttk.Frame(block_frame)
+        exec_mode_bar.pack(side=tk.TOP, fill=tk.X, padx=5, pady=(0, 6))
+
+        ttk.Label(exec_mode_bar, text="Sweep- / Mess-Modus:").grid(row=0, column=0, sticky=tk.W, padx=(0, 6))
+        self.freq_mode_var = tk.StringVar(value=self.FREQ_EXEC_MODES[0])
+        self.freq_mode_combo = ttk.Combobox(
+            exec_mode_bar,
+            textvariable=self.freq_mode_var,
+            values=self.FREQ_EXEC_MODES,
+            width=66,
+            state="readonly",
+        )
+        self.freq_mode_combo.grid(row=0, column=1, sticky=tk.W, padx=4)
+        self.freq_mode_combo.bind("<<ComboboxSelected>>", self._on_freq_mode_change)
+
+        self.single_freq_label = ttk.Label(exec_mode_bar, text="Einzelfrequenz(en) [Hz]:")
+        self.single_freq_label.grid(row=0, column=2, sticky=tk.W, padx=(15, 5))
+        self.single_freq_var = tk.StringVar(value="1000.0")
+        self.single_freq_entry = ttk.Entry(exec_mode_bar, textvariable=self.single_freq_var, width=18)
+        self.single_freq_entry.grid(row=0, column=3, sticky=tk.W, padx=4)
 
         columns = ("min_f", "max_f", "steps", "scale", "precision", "exc_type", "amplitude")
         self.block_tree = ttk.Treeview(block_frame, columns=columns, show="headings", height=4)
@@ -584,10 +637,22 @@ live_plot_mode = point
         self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         self._on_mode_change(None)
+        self._on_freq_mode_change(None)
         self._update_device_specific_labels()
 
+    def _on_freq_mode_change(self, event) -> None:
+        """Enables or disables the single-frequency input field based on the chosen execution mode."""
+        f_mode = self._get_freq_mode_code()
+        if f_mode == "single":
+            self.single_freq_entry.configure(state="normal")
+        else:
+            self.single_freq_entry.configure(state="disabled")
+
     def _update_device_specific_labels(self) -> None:
-        """Updates UI labels and hints dynamically based on the selected device model."""
+        """
+        Updates UI labels, hints, and available MUX channels dynamically based on
+        the selected device model (Standard vs. Medical).
+        """
         is_med = self._is_medical()
 
         exc_code = "1" if self.exc_type_var.get().startswith("1") else "2"
@@ -595,6 +660,7 @@ live_plot_mode = point
         if vr_code not in ("1", "2"):
             vr_code = "1"
         cr_code = self.curr_range_var.get().split()[0] if self.curr_range_var.get() else "2"
+        cur_mux_ch = self.mux_chan_var.get().split()[0] if self.mux_chan_var.get() else "2"
 
         if is_med:
             self.info_banner_frame.configure(bg="#e6f7ee", highlightbackground="#1b8a5a")
@@ -604,7 +670,7 @@ live_plot_mode = point
                 text=(
                     "AKTIVER MODUS: MEDICAL RESEARCH ISX-3\n"
                     "• Amplituden-Eingabe: Spitze-Spitze in App / Vpp (API halbiert automatisch fuer Hardware).\n"
-                    "• Spannungsbereiche: ±2.0 Vpp / ±180 mVpp | Interner MUX = Port 3."
+                    "• Spannungsbereiche: ±2.0 Vpp / ±180 mVpp | MUX: Extern (Port 2) & Intern (Port 3)."
                 ),
             )
             self.tab2_mode_hint.configure(
@@ -626,6 +692,13 @@ live_plot_mode = point
             cr_map = {c.split()[0]: c for c in self.CR_VALUES_MEDICAL}
             self.curr_range_var.set(cr_map.get(cr_code, self.CR_VALUES_MEDICAL[2]))
 
+            self.mux_chan_combo["values"] = self.MUX_CHAN_MEDICAL
+            self.mux_chan_combo.configure(state="readonly")
+            if cur_mux_ch == "3":
+                self.mux_chan_var.set(self.MUX_CHAN_MEDICAL[1])
+            else:
+                self.mux_chan_var.set(self.MUX_CHAN_MEDICAL[0])
+
             unit_str = "Vpp" if exc_code == "1" else "App"
             self.amp_label.configure(text=f"Globale Signalamplitude [{unit_str} (Spitze-Spitze)]:")
             self.amp_unit_hint.configure(text=f"(z.B. 0.0001 oder 100u = 100 µ{unit_str})")
@@ -638,7 +711,7 @@ live_plot_mode = point
                 text=(
                     "AKTIVER MODUS: STANDARD ISX-3 / ISX-3mini\n"
                     "• Amplituden-Eingabe: Echter Spitzenwert (Peak) in A / V (wird 1:1 an Hardware gesendet).\n"
-                    "• Spannungsbereiche: ±1.0 V Peak / ±0.09 V Peak | MUX ueber Extension Port (Port 2 via 0xB2)."
+                    "• Spannungsbereiche: ±1.0 V Peak / ±0.09 V Peak | MUX: Nur Externer MUX (Port 2 via 0xB2)."
                 ),
             )
             self.tab2_mode_hint.configure(
@@ -660,6 +733,10 @@ live_plot_mode = point
             cr_map = {c.split()[0]: c for c in self.CR_VALUES_STANDARD}
             self.curr_range_var.set(cr_map.get(cr_code, self.CR_VALUES_STANDARD[2]))
 
+            self.mux_chan_combo["values"] = self.MUX_CHAN_STANDARD
+            self.mux_chan_var.set(self.MUX_CHAN_STANDARD[0])
+            self.mux_chan_combo.configure(state="disabled")
+
             unit_str = "V Peak" if exc_code == "1" else "A Peak"
             self.amp_label.configure(text=f"Globale Signalamplitude [{unit_str}]:")
             self.amp_unit_hint.configure(text=f"(z.B. 0.0001 = 100 µ{unit_str[0]} Peak)")
@@ -678,9 +755,9 @@ live_plot_mode = point
     def _on_device_version_change(self, event) -> None:
         self._update_device_specific_labels()
         if self._is_medical():
-            self._log("[INFO] Medical Research ISX-3 gewaehlt: Eingaben in App / Vpp, int. MUX Port 3 aktiv.")
+            self._log("[INFO] Medical Research ISX-3 gewaehlt: Eingaben in App / Vpp, MUX Port 2 & 3 verfuegbar.")
         else:
-            self._log("[INFO] Standard ISX-3 gewaehlt: Eingaben in A / V (Peak), ext. MUX Port 2 aktiv.")
+            self._log("[INFO] Standard ISX-3 gewaehlt: Eingaben in A / V (Peak), nur externer MUX (Port 2) aktiv.")
 
     def _add_frequency_block(self) -> None:
         is_med = self._is_medical()
@@ -865,7 +942,6 @@ live_plot_mode = point
                     parent=self.root,
                 )
                 if ans is None:
-                    # Cancel -> reset combobox selection to previous profile name
                     self.profiles_combo.set(self.profile_name_var.get())
                     return
                 if ans is True:
@@ -894,7 +970,10 @@ live_plot_mode = point
             self.mux_sensors_var.set(ini.get("MUX", "active_sensors", fallback="1-8"))
             self.mux_mode_var.set(str(ini.getint("MUX", "mode", fallback=4)))
             m_chan = ini.getint("MUX", "channel", fallback=2)
-            self.mux_chan_var.set("3 (int. Mux32 / InternalMux)" if m_chan == 3 else "2 (ext. Mux32 / ExtPort)")
+            if is_med and m_chan == 3:
+                self.mux_chan_var.set(self.MUX_CHAN_MEDICAL[1])
+            else:
+                self.mux_chan_var.set(self.MUX_CHAN_STANDARD[0])
             self.mux_delay_var.set(str(ini.getfloat("MUX", "switch_delay_s", fallback=0.10)))
 
             fe_mode = ini.getint("Frontend", "measurement_mode", fallback=2)
@@ -916,6 +995,18 @@ live_plot_mode = point
             vr_list = self.VR_VALUES_MEDICAL if is_med else self.VR_VALUES_STANDARD
             vr_map = {v.split()[0]: v for v in vr_list}
             self.volt_range_var.set(vr_map.get(vr_val, vr_list[0]))
+
+            # Load frequency execution mode ('sweep', 'point_list', 'single')
+            f_mode_ini = ini.get("FrequencySetup", "mode", fallback="sweep").strip().lower()
+            if f_mode_ini == "point_list":
+                self.freq_mode_var.set(self.FREQ_EXEC_MODES[1])
+            elif f_mode_ini == "single":
+                self.freq_mode_var.set(self.FREQ_EXEC_MODES[2])
+            else:
+                self.freq_mode_var.set(self.FREQ_EXEC_MODES[0])
+
+            self.single_freq_var.set(ini.get("FrequencySetup", "frequency_hz", fallback="1000.0"))
+            self._on_freq_mode_change(None)
 
             for row in self.block_tree.get_children():
                 self.block_tree.delete(row)
@@ -1008,7 +1099,7 @@ live_plot_mode = point
         try:
             name = self.profile_name_var.get().strip() or "config"
             self.config_path = os.path.join(self.config_dir, f"{name}.ini")
-            curr_range_int = int(self.curr_range_var.get().split()[0])
+            curr_range_int = int(self.curr_range_var.get().split()[0]) if self.curr_range_var.get() else 2
 
             if not os.path.exists(self.config_path):
                 self._write_default_ini(self.config_path)
@@ -1031,21 +1122,26 @@ live_plot_mode = point
                 if ini.has_option("Connection", old_tcp_key):
                     ini.remove_option("Connection", old_tcp_key)
 
-            dev_ver_str = "medical" if self._is_medical() else "standard"
+            is_med = self._is_medical()
+            dev_ver_str = "medical" if is_med else "standard"
             ini.set("Connection", "device_version", dev_ver_str)
             ini.set("Connection", "port", self.port_var.get().strip())
             ini.set("Connection", "baudrate", self.baud_var.get().strip())
 
             is_mux = "MUX32" in self.mode_selector_var.get()
-            mux_ch_str = self.mux_chan_var.get().split()[0]
-            ini.set("MUX", "enabled", str(is_mux))
-            ini.set("MUX", "mode", self.mux_mode_var.get().strip())
-            ini.set("MUX", "channel", mux_ch_str)
-            ini.set("MUX", "active_sensors", self.mux_sensors_var.get().strip())
-            ini.set("MUX", "switch_delay_s", self.mux_delay_var.get().strip())
+            raw_mux_ch = self.mux_chan_var.get().strip()
+            mux_ch_str = raw_mux_ch.split()[0] if raw_mux_ch else "2"
+            if not is_med:
+                mux_ch_str = "2"
 
-            fe_mode_str = self.main_bnc_mode_var.get().split()[0]
-            vr_str = self.volt_range_var.get().split()[0]
+            ini.set("MUX", "enabled", str(is_mux))
+            ini.set("MUX", "mode", self.mux_mode_var.get().strip() or "4")
+            ini.set("MUX", "channel", mux_ch_str)
+            ini.set("MUX", "active_sensors", self.mux_sensors_var.get().strip() or "1-8")
+            ini.set("MUX", "switch_delay_s", self.mux_delay_var.get().strip() or "0.10")
+
+            fe_mode_str = self.main_bnc_mode_var.get().split()[0] if self.main_bnc_mode_var.get() else "2"
+            vr_str = self.volt_range_var.get().split()[0] if self.volt_range_var.get() else "1"
             if vr_str not in ("1", "2"):
                 vr_str = "1"
             ini.set("Frontend", "measurement_mode", fe_mode_str)
@@ -1063,7 +1159,7 @@ live_plot_mode = point
 
             children = self.block_tree.get_children()
             if not children:
-                default_exc_lbl = "Current [App]" if self._is_medical() else "Current [A Peak]"
+                default_exc_lbl = "Current [App]" if is_med else "Current [A Peak]"
                 self.block_tree.insert("", tk.END, values=("100.0", "10000000.0", "101", "logarithmic", "1.0", default_exc_lbl, "0.0001"))
                 children = self.block_tree.get_children()
 
@@ -1084,7 +1180,9 @@ live_plot_mode = point
                 ini.set("FrequencyBlocks", f"block_{idx}_amplitude", amp_parsed)
 
             first_vals = self.block_tree.item(children[0], "values")
-            ini.set("FrequencySetup", "mode", "sweep")
+            freq_exec_mode = self._get_freq_mode_code()
+            ini.set("FrequencySetup", "mode", freq_exec_mode)
+            ini.set("FrequencySetup", "frequency_hz", self.single_freq_var.get().strip() or "1000.0")
             ini.set("FrequencySetup", "start_frequency_hz", str(first_vals[0]))
             ini.set("FrequencySetup", "stop_frequency_hz", str(first_vals[1]))
             ini.set("FrequencySetup", "count", str(first_vals[2]))
@@ -1097,17 +1195,17 @@ live_plot_mode = point
             first_amp_raw = first_vals[6] if len(first_vals) > 6 else self.amp_var.get().strip()
             ini.set("FrequencySetup", "amplitude", str(parse_value_with_prefix(first_amp_raw)))
 
-            ini.set("FrequencySetup", "point_delay_ms", self.delay_var.get().strip())
+            ini.set("FrequencySetup", "point_delay_ms", self.delay_var.get().strip() or "20.0")
             ini.set("FrequencySetup", "phase_sync", str(self.phase_sync_var.get()))
 
-            ini.set("SyncTime", "sync_time_us", self.sync_time_var.get().strip())
+            ini.set("SyncTime", "sync_time_us", self.sync_time_var.get().strip() or "0")
 
-            ts_str = self.ts_mode_var.get().split()[0]
+            ts_str = self.ts_mode_var.get().split()[0] if self.ts_mode_var.get() else "0"
             ini.set("Options", "timestamp_mode", ts_str)
             ini.set("Options", "enable_current_range_output", str(self.curr_range_out_var.get()))
 
-            ini.set("Measurement", "number_of_spectra", self.spectra_var.get().strip())
-            ini.set("ApiSettings", "plot_type", self.plot_type_var.get())
+            ini.set("Measurement", "number_of_spectra", self.spectra_var.get().strip() or "3")
+            ini.set("ApiSettings", "plot_type", self.plot_type_var.get() or "bode")
             ini.set("ApiSettings", "continuous_measurement", "False")
             if ini.has_option("ApiSettings", "use_hardware_sweep"):
                 ini.remove_option("ApiSettings", "use_hardware_sweep")
@@ -1119,7 +1217,7 @@ live_plot_mode = point
                 ini.write(f)
 
             self._saved_snapshot = self._get_form_state_snapshot()
-            self._log(f"[OK] Einstellungen gespeichert in: {os.path.basename(self.config_path)}")
+            self._log(f"[OK] Einstellungen gespeichert in: {os.path.basename(self.config_path)} (Modus: {freq_exec_mode})")
             return True
         except Exception as e:
             messagebox.showerror("Fehler beim Speichern", str(e))
@@ -1192,7 +1290,6 @@ live_plot_mode = point
                 self.refresh_profile_list()
                 self.profiles_combo.set(prof_name)
             else:
-                # User selected 'No' -> revert form to the last saved INI file state
                 self._log("[INFO] Ungespeicherte GUI-Aenderungen verworfen. Lade letzten Stand aus INI...")
                 self.load_ini_to_form()
 

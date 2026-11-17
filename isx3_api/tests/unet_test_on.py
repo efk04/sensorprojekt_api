@@ -1,13 +1,13 @@
 """
-test_hardware_isx3.py - Hardware-in-the-Loop (HIL) Integrationstest
-fuer das angeschlossene Sciospec Medical Research ISX-3.
+unet_test_on.py (test_hardware_isx3.py) - Hardware-in-the-Loop (HIL) integration test
+for the connected Sciospec Medical Research ISX-3.
 
-Prueft bei real angeschlossener Hardware:
-1. Automatische USB/COM-Port-Erkennung (inkl. interaktiver Nachfrage bei Unklarheit)
-2. System-Baseline-Drift-Check auf dem internen 2 kΩ Referenzwiderstand (MUX-Port 3)
-3. Einzelpunkt-Messung & sauberes Beenden des Measure-Modus (stop_measurement)
-4. Multi-Pin-Parallelschaltung ('1: CE:1,5,9, RE:2,6,10, WS:3,7,11, WE:4,8,12')
-5. Hardware-Sweep & HDF5-Persistenz inklusive Zeitmessung (measurement_duration_ms)
+Tests on real connected hardware:
+1. Automatic USB/COM port detection (with interactive terminal fallback if ambiguous)
+2. System baseline drift check on the internal 2 kOhm reference resistor (MUX port 3)
+3. Single-point measurement & clean exit from measurement mode (stop_measurement)
+4. Standard 4-pin custom MUX sweep ('1: 22,22,23,23') & HDF5 persistence including timing
+5. Verification that the register-based multi-pin placeholder blocks unsupported ganging syntax
 """
 
 import os
@@ -20,22 +20,22 @@ import h5py
 import matplotlib.pyplot as plt
 import serial.tools.list_ports
 
-# Modulpfad einbinden
+# Add src directory to module search path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
 
 from isx3_api.commands import ISX3
-from isx3_api.measurement import Measurement
+from isx3_api.measurement import Measurement, parse_mux_sensor_expression
 
 
 def resolve_hardware_port(default_port: str = "COM12") -> str | None:
     """
-    Erkennt den COM-Port des Sciospec ISX-3 automatisch anhand der USB-Metadaten
-    (Sciospec / FTDI / VID 0x0403). Falls kein Port eindeutig erkannt wird oder mehrere
-    Geraete angeschlossen sind, wird der Nutzer im Terminal zur Auswahl aufgefordert.
+    Automatically detects the COM port of the Sciospec ISX-3 based on USB metadata
+    (Sciospec / FTDI / VID 0x0403). If no port is uniquely identified or multiple
+    devices are connected, prompts the user interactively in the terminal.
     """
     ports = list(serial.tools.list_ports.comports())
 
-    # 1. Nach Sciospec- oder typischen FTDI-USB-Chips suchen
+    # 1. Search for Sciospec or FTDI USB-to-serial converter chips
     sciospec_candidates = []
     for p in ports:
         desc = f"{p.description or ''} {p.manufacturer or ''} {p.hwid or ''}".lower()
@@ -46,18 +46,18 @@ def resolve_hardware_port(default_port: str = "COM12") -> str | None:
         print(f"[AUTO-DETECT] Sciospec/FTDI-Schnittstelle erkannt auf: {sciospec_candidates[0]}")
         return sciospec_candidates[0]
 
-    # 2. Wenn genau ein Port am System existiert, diesen direkt nehmen
+    # 2. If exactly one serial port exists on the system, select it directly
     if len(ports) == 1:
         print(f"[AUTO-DETECT] Einziger verfuegbarer COM-Port erkannt: {ports[0].device} ({ports[0].description})")
         return ports[0].device
 
-    # 3. Wenn default_port (z.B. COM12) vorhanden ist und keine anderen Kandidaten konkurrieren
+    # 3. Use default_port (e.g., COM12) if present and no other FTDI candidates compete
     available_names = [p.device for p in ports]
     if default_port in available_names and not sciospec_candidates:
         print(f"[AUTO-DETECT] Standard-Port '{default_port}' gefunden.")
         return default_port
 
-    # 4. Interaktive Nachfrage im Terminal, wenn Erkennung nicht eindeutig ist
+    # 4. Interactive fallback prompt in the terminal if detection is ambiguous
     print("\n" + "=" * 70)
     print(" COM-PORT AUSWAHL FUER HARDWARE-TEST")
     print("=" * 70)
@@ -88,7 +88,7 @@ def resolve_hardware_port(default_port: str = "COM12") -> str | None:
 
 
 class TestISX3HardwareIntegration(unittest.TestCase):
-    """Hardware-Tests direkt am angeschlossenen Medical Research ISX-3."""
+    """Hardware integration tests executed directly on the connected Medical Research ISX-3."""
 
     @classmethod
     def setUpClass(cls):
@@ -108,7 +108,7 @@ class TestISX3HardwareIntegration(unittest.TestCase):
         print(f"\n[HW-TEST] Starte Hardware-Tests auf Port {cls.port} ({cls.baudrate} Baud)...")
 
     def test_01_connection_and_stop_command(self):
-        """1. Prueft Verbindungsaufbau, Software-Reset und Stop-Befehl."""
+        """1. Verifies serial connection setup, stop command, and MUX routing reset."""
         isx = ISX3()
         dev = isx.connect_device_fs({
             "port": self.port,
@@ -124,7 +124,7 @@ class TestISX3HardwareIntegration(unittest.TestCase):
                 isx.device.close()
 
     def test_02_baseline_drift_check_internal_2k(self):
-        """2. Prueft den internen 2 kΩ Referenzwiderstand (Pins 22,22,23,23 auf MUX-Port 3)."""
+        """2. Verifies the internal 2 kOhm reference resistor (pins 22,22,23,23 on MUX port 3)."""
         isx = ISX3()
         report = isx.run_baseline_drift_check(
             port=self.port,
@@ -139,14 +139,14 @@ class TestISX3HardwareIntegration(unittest.TestCase):
         self.assertGreater(mean_z, 1800.0)
         self.assertLess(mean_z, 2300.0)
 
-    def test_03_multi_pin_ganging_and_hdf5_sweep(self):
-        """3. Testet Multi-Pin-Parallelschaltung (12 Pins) + Hardware-Sweep + HDF5-Speicherung."""
+    def test_03_custom_4pin_mux_and_hdf5_sweep(self):
+        """3. Tests supported 4-pin custom MUX routing ('1: 22,22,23,23'), hardware sweep, and HDF5 storage."""
         temp_dir = tempfile.mkdtemp()
         orig_cwd = os.getcwd()
         os.chdir(temp_dir)
         plt.ioff()
 
-        ini_path = os.path.join(temp_dir, "hw_test_multipin.ini")
+        ini_path = os.path.join(temp_dir, "hw_test_mux.ini")
         with open(ini_path, "w", encoding="utf-8") as f:
             f.write(
                 f"[Connection]\n"
@@ -156,12 +156,12 @@ class TestISX3HardwareIntegration(unittest.TestCase):
                 f"[MUX]\n"
                 f"enabled = True\n"
                 f"mode = 4\n"
-                f"channel = 2\n"
-                f"active_sensors = 1: CE:1,5,9 RE:2,6,10 WS:3,7,11 WE:4,8,12\n"
+                f"channel = 3\n"
+                f"active_sensors = 1: 22,22,23,23\n"
                 f"switch_delay_s = 0.10\n\n"
                 f"[Frontend]\n"
                 f"measurement_mode = 2\n"
-                f"measurement_channel = 2\n"
+                f"measurement_channel = 3\n"
                 f"current_range = 2\n"
                 f"voltage_range = 1\n\n"
                 f"[FrequencyBlocks]\n"
@@ -205,6 +205,11 @@ class TestISX3HardwareIntegration(unittest.TestCase):
         finally:
             os.chdir(orig_cwd)
             shutil.rmtree(temp_dir)
+
+    def test_04_multipin_register_placeholder_raises(self):
+        """4. Verifies that the register-based multi-pin placeholder blocks unsupported ganging syntax."""
+        with self.assertRaises(NotImplementedError):
+            parse_mux_sensor_expression("1: CE:1,5,9 RE:2,6,10 WS:3,7,11 WE:4,8,12")
 
 
 if __name__ == "__main__":

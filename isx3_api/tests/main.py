@@ -4,7 +4,8 @@ main.py - Entry point for the ISX-3 measurement framework.
 Supports three operating modes:
 1. Graphical User Interface (GUI) for interactive configuration and control.
 2. Direct loading of an existing INI configuration file via path input.
-3. Step-by-step interactive console wizard for creating new profiles.
+3. Step-by-step interactive console wizard for creating new profiles (supporting
+   'sweep', 'point_list', and 'single' frequency execution modes).
 """
 
 import sys
@@ -175,8 +176,22 @@ def interactive_console_config() -> str | None:
     v_rng = input("Waehle Spannungsbereich (1 oder 2) [Standard: 1]: ").strip()
     ini.set("Frontend", "voltage_range", v_rng if v_rng in ["1", "2"] else "1")
 
-    # 4. Frequency blocks configuration (supports multiple blocks)
-    print("\n--- 4. FREQUENZBLOECKE KONFIGURIEREN ---")
+    # 4. Frequency execution mode & frequency blocks
+    print("\n--- 4. FREQUENZ-MODUS & FREQUENZBLOECKE KONFIGURIEREN ---")
+    print("  Wie soll die Frequenzmessung ausgefuehrt werden?")
+    print("    [1] sweep      - Hardware-Block-Sweep via 0xB6 Sub 0x03 (Schnellster Modus) [Standard]")
+    print("    [2] point_list - Python-Einzelpunkt-Liste via 0xB6 Sub 0x02 (Bereich Punkt fuer Punkt uebergeben)")
+    print("    [3] single     - Diskrete Einzelfrequenz oder Komma-Liste (z.B. '1000' oder '100, 1k, 10k')")
+    f_mode_in = input("  Waehle Frequenz-Modus (1, 2 oder 3) [Standard: 1]: ").strip()
+    freq_exec_mode = "point_list" if f_mode_in == "2" else ("single" if f_mode_in == "3" else "sweep")
+    ini.set("FrequencySetup", "mode", freq_exec_mode)
+
+    if freq_exec_mode == "single":
+        single_f = input("  Einzelfrequenz(en) in Hz eingeben (z.B. '1000' oder '100, 1k, 10k') [Standard: 1000.0]: ").strip() or "1000.0"
+        ini.set("FrequencySetup", "frequency_hz", single_f)
+    else:
+        ini.set("FrequencySetup", "frequency_hz", "1000.0")
+
     block_idx = 1
     while True:
         print(f"\n  >>> Frequenzblock #{block_idx} <<<")
@@ -213,7 +228,6 @@ def interactive_console_config() -> str | None:
         ini.set("FrequencyBlocks", f"block_{block_idx}_amplitude", amp_clean)
 
         if block_idx == 1:
-            ini.set("FrequencySetup", "mode", "sweep")
             ini.set("FrequencySetup", "start_frequency_hz", start_f)
             ini.set("FrequencySetup", "stop_frequency_hz", stop_f)
             ini.set("FrequencySetup", "count", steps)

@@ -1,8 +1,10 @@
 """
 measurement.py - Central measurement orchestrator for the Sciospec ISX-3.
 
-Controls single-point and hardware-sweep measurements, manages live visualization,
-and persists all measurement data and metadata in HDF5 format.
+Controls three execution modes:
+1. 'sweep': Hardware-controlled block sweep (0xB6 Sub 0x03)
+2. 'point_list': Python-controlled point-by-point sweep using the frequency block list (0xB6 Sub 0x02 per point)
+3. 'single': Discrete single-point measurement(s) from 'frequency_hz' (0xB6 Sub 0x02)
 """
 
 from datetime import datetime
@@ -30,14 +32,10 @@ def parse_mux_sensor_expression(raw_sensors: str) -> tuple[list[int], dict[int, 
     2. Custom 4-pin or 2-pin assignments per sensor (colon syntax):
        '1: 2,5,8,6; 2: 22,22,23,23'
     3. PLACEHOLDER / DEACTIVATED: Electrode Ganging ('1: CE:1,5,9, RE:2,6,10, WS:3,7,11, WE:4,8,12').
-       Currently blocked because hardware-level parallel switching requires a future
-       Sciospec firmware update with direct register programming. The parsing logic
-       is preserved below for future activation.
     """
     active_sensors: list[int] = []
     custom_sensor_pins_map: dict[int, tuple | list[tuple]] = {}
 
-    # Check if named electrode groups (CE, RE, WS, WE) are specified
     if any(lbl in raw_sensors.upper() for lbl in ("CE", "RE", "WS", "WE")):
         if not ENABLE_EXPERIMENTAL_MULTIPIN_STACKING:
             raise NotImplementedError(
@@ -230,7 +228,6 @@ class Measurement:
             else:
                 group.create_dataset("imaginary_part", data=results_data["imag"])
 
-            # Store hardware timestamps (command 0x97) if present
             hw_ts_list = [t for t in results_data.get("timestamp", []) if t is not None]
             if hw_ts_list:
                 if "hw_timestamp" in group:
@@ -240,7 +237,6 @@ class Measurement:
                     units = [u for u in results_data.get("timestamp_unit", []) if u is not None]
                     ds_ts.attrs["unit"] = units[0] if units else "unknown"
 
-            # Store current range feedback if present
             cr_data = [r for r in results_data.get("current_range", []) if r is not None]
             if cr_data:
                 if "current_range" in group:
@@ -253,7 +249,7 @@ class Measurement:
     def start_single_step(
         self, current_setup: dict, measurement_settings: dict
     ) -> tuple[dict, float]:
-        """Executes a single discrete frequency point measurement."""
+        """Executes a single discrete frequency point measurement via 0xB6 Sub 0x02."""
         self.device.set_frequency_setup(current_setup)
 
         number_of_spectra = int(current_setup["number_of_spectra"])
@@ -286,6 +282,43 @@ class Measurement:
 
         plt.pause(0.01)
 
+    def _run_point_by_point_queue(
+        self, sensor_idx: int, mux_enabled: bool, live_plot_enabled: bool, live_plot_mode: str
+    ) -> None:
+        """Executes the measurement queue point-by-point using start_single_step (0xB6 Sub 0x02 per point)."""
+        total_pts = len(self.measurement_queue)
+        for idx, current_setup in enumerate(self.measurement_queue):
+            print(
+                f"  -> [Punkt {idx + 1}/{total_pts}] Sende Einzelfrequenz "
+                f"f = {current_setup['frequency']:g} Hz via Python (0xB6 Sub 0x02)..."
+            )
+            step_results, timestamp = self.start_single_step(
+                current_setup, self.measurement_settings
+            )
+
+            if not step_results.get("id"):
+                continue
+
+            self.save_measurement(
+                results_data=step_results,
+                timestamp=timestamp,
+                current_setup=current_setup,
+                icm=1,
+                sensor_idx=sensor_idx if mux_enabled else 0,
+            )
+
+            self.current_results.append(step_results)
+
+            if live_plot_enabled:
+                is_last_point = (idx == len(self.measurement_queue) - 1)
+                if live_plot_mode == "point" or is_last_point:
+                    self.update_live_plot(
+                        results=step_results,
+                        current_setup=current_setup,
+                        current_results=self.current_results,
+                        len_queue=len(self.measurement_queue),
+                    )
+
     def measurement(self, config_path: str | None = None) -> str | None:
         """Main entry method: executes the complete measurement campaign."""
         if not config_path:
@@ -299,12 +332,17 @@ class Measurement:
         self.measurement_queue = self.config_builder.generate_measurement_queue()
         self.plot_type = self.measurement_settings.get("plot_type", "bode")
 
-        device_version = str(self.measurement_settings.get("device_version", "standard")).strip().lower()
+        raw_ver = self.measurement_settings.get("device_version", "standard")
+        device_version = str(raw_ver if raw_ver else "standard").strip().lower()
         freq_mode = str(self.measurement_settings.get("mode", "sweep")).strip().lower()
 
         mux_enabled = bool(self.measurement_settings.get("mux_enabled", False))
         mux_mode = int(self.measurement_settings.get("mux_mode", 4))
         mux_chan = int(self.measurement_settings.get("mux_channel", 2))
+        if "medical" not in device_version:
+            mux_chan = 2
+            self.measurement_settings["mux_channel"] = 2
+
         raw_sensors = str(self.measurement_settings.get("mux_active_sensors", "1-8"))
         switch_delay = float(self.measurement_settings.get("mux_switch_delay_s", 0.10))
 
@@ -336,6 +374,8 @@ class Measurement:
 
         fe_mode = 2 if (mux_enabled and mux_mode == 4) else (1 if mux_enabled else main_fe_mode)
         fe_chan = mux_chan if mux_enabled else 1
+        self.measurement_settings["measurement_mode"] = fe_mode
+        self.measurement_settings["measurement_channel"] = fe_chan
 
         for step in self.measurement_queue:
             step["device_version"] = device_version
@@ -344,23 +384,31 @@ class Measurement:
             step["current_range"] = c_range
             step["voltage_range"] = v_range
 
+        mode_desc_map = {
+            "sweep": "HARDWARE-BLOCK-SWEEP (0xB6 Sub 0x03)",
+            "point_list": "PYTHON-EINZELPUNKT-LISTE (0xB6 Sub 0x02 pro Frequenzpunkt)",
+            "single": "DISKRETE EINZELMESSUNG (0xB6 Sub 0x02)",
+        }
+        mode_desc = mode_desc_map.get(freq_mode, freq_mode.upper())
+
         try:
             for sensor_idx in active_sensors:
                 t_start = time.time()
 
                 if mux_enabled:
-                    print(f"\n==========================================")
-                    print(f" Starte Messung ({freq_mode.upper()}) fuer MUX-Sensor #{sensor_idx} [{device_version.upper()}]")
-                    print(f"==========================================")
+                    print(f"\n==================================================================")
+                    print(f" Starte Messung [{mode_desc}] fuer MUX-Sensor #{sensor_idx} [{device_version.upper()}]")
+                    print(f"==================================================================")
                     c_pins = custom_sensor_pins_map.get(sensor_idx)
                     self.device.route_mux_sensor(sensor_idx=sensor_idx, wire_mode=mux_mode, custom_pins=c_pins)
                     time.sleep(max(0.05, switch_delay))
                 else:
                     self.device.active_mux_pins = None
-                    print(f"\n--- Starte Messdurchlauf ({freq_mode.upper()}) ueber MAIN PORT [{device_version.upper()}] ---")
+                    print(f"\n--- Starte Messdurchlauf [{mode_desc}] ueber MAIN PORT [{device_version.upper()}] ---")
 
                 self.current_results = []
 
+                # Only use hardware block sweep (0xB6 Sub 0x03) when mode is explicitly 'sweep'
                 if freq_mode == "sweep" and len(self.measurement_queue) > 1:
                     blocks = self.config_builder.parse_frequency_blocks()
                     total_count = len(self.measurement_queue)
@@ -418,33 +466,13 @@ class Measurement:
                                     len_queue=len(self.measurement_queue),
                                 )
                 else:
-                    for idx, current_setup in enumerate(self.measurement_queue):
-                        step_results, timestamp = self.start_single_step(
-                            current_setup, self.measurement_settings
-                        )
-
-                        if not step_results.get("id"):
-                            continue
-
-                        self.save_measurement(
-                            results_data=step_results,
-                            timestamp=timestamp,
-                            current_setup=current_setup,
-                            icm=1,
-                            sensor_idx=sensor_idx if mux_enabled else 0,
-                        )
-
-                        self.current_results.append(step_results)
-
-                        if live_plot_enabled:
-                            is_last_point = (idx == len(self.measurement_queue) - 1)
-                            if live_plot_mode == "point" or is_last_point:
-                                self.update_live_plot(
-                                    results=step_results,
-                                    current_setup=current_setup,
-                                    current_results=self.current_results,
-                                    len_queue=len(self.measurement_queue),
-                                )
+                    # Executes 'point_list' (Python point-by-point sweep) and 'single' (discrete point(s))
+                    self._run_point_by_point_queue(
+                        sensor_idx=sensor_idx,
+                        mux_enabled=mux_enabled,
+                        live_plot_enabled=live_plot_enabled,
+                        live_plot_mode=live_plot_mode,
+                    )
 
                 t_end = time.time()
                 duration_ms = (t_end - t_start) * 1000.0
@@ -454,8 +482,12 @@ class Measurement:
                     group_key = f"Sensor_{sensor_idx}" if mux_enabled else "Measurement"
                     grp = h5_file.require_group(group_key)
                     grp.attrs["measurement_duration_ms"] = duration_ms
+                    grp.attrs["execution_mode"] = freq_mode
 
-                print(f"[INFO] Sensor #{sensor_idx} abgeschlossen. Reale API-Messzeit: {duration_ms:.2f} ms")
+                print(
+                    f"[INFO] Sensor #{sensor_idx} ({mode_desc}) abgeschlossen. "
+                    f"Reale API-Messzeit: {duration_ms:.2f} ms ({duration_ms / 1000.0:.3f} s)"
+                )
 
             print(f"\n[OK] Alle Messungen erfolgreich abgeschlossen. Datei: {h5_full_path}")
 

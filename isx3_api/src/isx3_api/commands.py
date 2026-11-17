@@ -1,10 +1,13 @@
 """
 commands.py - Driver and low-level communication layer for the Sciospec ISX-3.
 
-Provides binary frame communication with ACK/NACK verification, analog frontend
-and frequency sweep setup for both Standard and Medical Research models, a
-placeholder for future register-based multi-pin ganging, and the automated
-system baseline drift check on the internal 2 kOhm reference path.
+Strictly separates the command sequences for:
+1. Medical Research ISX-3 (device_version == 'medical'):
+   Uses the 15-byte 0xB0 frontend protocol (ports 1, 2, 3), peak-to-peak amplitude halving,
+   and multi-block hardware sweeps.
+2. Standard ISX-3 / ISX-3mini (device_version == 'standard'):
+   Uses the classic 4-byte 0xB0 frontend protocol (Main Port 1 & External MUX Port 2),
+   command 0xB2 for external MUX channel routing, and 1:1 peak amplitudes.
 """
 
 import math
@@ -69,6 +72,21 @@ class ISX3:
         """Returns a list of all detected serial COM ports."""
         return [p.device for p in serial.tools.list_ports.comports()]
 
+    def _clear_serial_buffers(self, delay_s: float = 0.05) -> None:
+        """Flushes pending input/output bytes to keep the serial parser synchronized."""
+        if not self.device or not self.device.is_open:
+            return
+        try:
+            if delay_s > 0:
+                time.sleep(delay_s)
+            while self.device.in_waiting > 0:
+                self.device.read(self.device.in_waiting)
+                time.sleep(0.02)
+            self.device.reset_input_buffer()
+            self.device.reset_output_buffer()
+        except Exception:
+            pass
+
     def connect_device_fs(self, settings: dict):
         """
         Opens the serial USB connection to the ISX-3 device.
@@ -78,7 +96,8 @@ class ISX3:
         """
         port = settings.get("port", "COM12")
         baudrate = int(settings.get("baudrate", 115200))
-        self.device_version = str(settings.get("device_version", "standard")).strip().lower()
+        raw_ver = settings.get("device_version", "standard")
+        self.device_version = str(raw_ver if raw_ver else "standard").strip().lower()
 
         if not self.is_port_available(port):
             print(f"[FEHLER] Serieller Port '{port}' ist nicht verfuegbar.")
@@ -95,9 +114,12 @@ class ISX3:
             )
             self.serial_protocol = "FS"
             self.active_mux_pins = None
-            self.device.reset_input_buffer()
-            self.device.reset_output_buffer()
-            ver_label = "Medical Research ISX-3" if "medical" in self.device_version else "ISX-3 / ISX-3mini (Standard)"
+            self._clear_serial_buffers(delay_s=0.05)
+            ver_label = (
+                "Medical Research ISX-3"
+                if "medical" in self.device_version
+                else "ISX-3 / ISX-3mini (Standard)"
+            )
             print(f"[OK] Verbunden mit {self.device.name} ({baudrate} Baud) | Modus: {ver_label}")
             return self.device
         except serial.SerialException as error:
@@ -107,7 +129,7 @@ class ISX3:
     def _send_command(self, cmd_tag: int, data: bytes, timeout: float = 3.0) -> None:
         """
         Sends a data packet using the Sciospec frame format: [Tag] [Length] [Payload] [Tag]
-        and waits for the device acknowledgment (ACK).
+        and waits for the 4-byte device acknowledgment (ACK).
         """
         if not self.device or not self.device.is_open:
             raise ConnectionError("Keine aktive serielle Verbindung zum ISX-3 vorhanden.")
@@ -124,11 +146,15 @@ class ISX3:
         self.device.write(frame)
         self.device.flush()
 
-        self._wait_for_ack(cmd_tag, timeout=timeout)
+        self._wait_for_ack(cmd_tag, timeout=timeout, sent_frame=frame)
 
-    def _wait_for_ack(self, original_cmd_tag: int, timeout: float = 3.0) -> None:
-        """Reads the device response and verifies that a valid ACK frame was received."""
+    def _wait_for_ack(self, original_cmd_tag: int, timeout: float = 3.0, sent_frame: bytes = b"") -> None:
+        """
+        Reads the device response and verifies that a valid 4-byte ACK frame
+        ([0x18] [0x01] [Status] [0x18]) was received.
+        """
         start_time = time.time()
+        hex_info = f" (Gesendet: {sent_frame.hex().upper()})" if sent_frame else ""
         while time.time() - start_time < timeout:
             tag_byte = self.device.read(1)
             if not tag_byte:
@@ -136,11 +162,11 @@ class ISX3:
 
             tag = tag_byte[0]
 
-            # Process acknowledgment frame (0x18)
+            # Process 4-byte acknowledgment frame (0x18 0x01 [ACK] 0x18) -> read remaining 3 bytes
             if tag == self.ACK_TAG:
                 rest = self.device.read(3)
                 if len(rest) < 3:
-                    raise TimeoutError(f"Unvollstaendiger ACK-Frame fuer Befehl 0x{original_cmd_tag:02X}.")
+                    raise TimeoutError(f"Unvollstaendiger ACK-Frame fuer Befehl 0x{original_cmd_tag:02X}{hex_info}.")
                 if rest[2] != self.ACK_TAG:
                     continue
 
@@ -151,12 +177,16 @@ class ISX3:
                     print(f"[WARNUNG] ISX-3 meldet: {MSG_DICT[status]}")
                     continue
                 if status == self.NACK_SYNTAX:
-                    raise ValueError(f"NACK (0x81): Ungueltige Syntax/Parameter fuer Befehl 0x{original_cmd_tag:02X}.")
+                    raise ValueError(
+                        f"NACK (0x81): Ungueltige Syntax/Parameter fuer Befehl 0x{original_cmd_tag:02X}{hex_info}."
+                    )
                 if status == self.NACK_NOT_RECOGNIZED:
-                    raise ValueError(f"NACK (0x82): Befehl 0x{original_cmd_tag:02X} wurde vom ISX-3 nicht erkannt.")
+                    raise ValueError(
+                        f"NACK (0x82): Befehl 0x{original_cmd_tag:02X} wurde vom ISX-3 nicht erkannt{hex_info}."
+                    )
 
                 status_text = MSG_DICT.get(status, f"Unbekannter Status-Code 0x{status:02X}")
-                raise ValueError(f"Unerwarteter Status empfangen: {status_text}")
+                raise ValueError(f"Unerwarteter Status empfangen: {status_text}{hex_info}")
 
             # Consume asynchronous system messages or trailing measurement frames (0xB8)
             elif tag in (
@@ -176,25 +206,21 @@ class ISX3:
                     print(f"[STATUS-INFO] ISX-3 Systemnachricht (0x1D): Payload={payload.hex()}")
                 continue
 
-        raise TimeoutError(f"Timeout: Keine Bestaetigung (ACK) fuer Befehl 0x{original_cmd_tag:02X} erhalten.")
+        raise TimeoutError(f"Timeout: Keine Bestaetigung (ACK) fuer Befehl 0x{original_cmd_tag:02X}{hex_info} erhalten.")
 
     def stop_measurement(self) -> None:
         """
-        Sends the explicit stop command (0xB8 0x01 0x00 0xB8) to the ISX-3 to ensure
-        the device exits measurement mode, and flushes any remaining measurement frames.
+        Stops a running measurement and flushes the serial input buffer.
         """
         if not self.device or not self.device.is_open:
             return
         try:
-            stop_frame = bytes([self.CMD_MEASURE, 0x01, 0x00, self.CMD_MEASURE])
-            self.device.write(stop_frame)
-            self.device.flush()
-            time.sleep(0.15)
-            # Flush any trailing measurement bytes and the stop ACK from the input buffer
-            while self.device.in_waiting > 0:
-                self.device.read(self.device.in_waiting)
-                time.sleep(0.05)
-            self.device.reset_input_buffer()
+            if "medical" in self.device_version:
+                stop_frame = bytes([self.CMD_MEASURE, 0x01, 0x00, self.CMD_MEASURE])
+                self.device.write(stop_frame)
+                self.device.flush()
+                time.sleep(0.10)
+            self._clear_serial_buffers(delay_s=0.05)
         except Exception as e:
             print(f"[HINWEIS] Fehler beim Stoppen der Messung: {e}")
 
@@ -214,59 +240,79 @@ class ISX3:
 
     def set_options(self, settings: dict) -> None:
         """
-        Configures optional frame extensions (0x97) and inter-sweep synchronization.
-        In Medical Research ISX-3 mode, inactive 0x97 commands are skipped or protected
-        via try-except to prevent ACK timeouts or NACK command lockups.
+        Configures optional frame extensions (0x97) and inter-sweep synchronization (0xB9).
+        Strictly separates Medical Research ISX-3 and Standard ISX-3 behavior.
         """
-        self.device_version = str(settings.get("device_version", self.device_version)).strip().lower()
+        raw_ver = settings.get("device_version", self.device_version)
+        self.device_version = str(raw_ver if raw_ver else "standard").strip().lower()
         timestamp_mode = int(settings.get("timestamp_mode", 0))
         enable_current_range_output = bool(settings.get("enable_current_range_output", False))
         dc_bias_enabled = bool(settings.get("dc_bias_enabled", False))
         bias_voltage_v = float(settings.get("bias_voltage_v", 0.0))
         sync_time_us = int(settings.get("sync_time_us", 0))
 
-        # Ensure the device is not stuck in measurement mode before applying options
-        self.stop_measurement()
+        if "medical" in self.device_version:
+            # =================================================================
+            # BRANCH 1: MEDICAL RESEARCH ISX-3 (Preserved 1:1)
+            # =================================================================
+            self.stop_measurement()
+            if timestamp_mode > 0 or enable_current_range_output:
+                try:
+                    if timestamp_mode == 1:
+                        self._send_command(0x97, bytes([0x01, 0x01]), timeout=1.0)
+                    elif timestamp_mode == 2:
+                        self._send_command(0x97, bytes([0x02, 0x01]), timeout=1.0)
+                    if enable_current_range_output:
+                        self._send_command(0x97, bytes([0x04, 0x01]), timeout=1.0)
+                except Exception as e:
+                    print(f"[HINWEIS] Befehl 0x97 wird von dieser Firmware nicht bestaetigt (uebersprungen): {e}")
+                    settings["timestamp_mode"] = 0
+                    settings["enable_current_range_output"] = False
+                    self._clear_serial_buffers(delay_s=0.10)
+            else:
+                print("[INFO] Medical-Modus: Ueberspringe inaktive 0x97-Optionen (verhindert ACK-Timeout).")
 
-        if "medical" not in self.device_version or timestamp_mode > 0 or enable_current_range_output:
-            try:
-                if timestamp_mode == 1:
-                    self._send_command(0x97, bytes([0x01, 0x01]), timeout=1.0)
-                elif timestamp_mode == 2:
-                    self._send_command(0x97, bytes([0x02, 0x01]), timeout=1.0)
-                elif "medical" not in self.device_version:
-                    self._send_command(0x97, bytes([0x01, 0x00]), timeout=1.0)
-                    self._send_command(0x97, bytes([0x02, 0x00]), timeout=1.0)
-
-                if enable_current_range_output or "medical" not in self.device_version:
-                    self._send_command(0x97, bytes([0x04, 1 if enable_current_range_output else 0]), timeout=1.0)
-            except Exception as e:
-                print(f"[HINWEIS] Befehl 0x97 wird von dieser Firmware nicht bestaetigt (uebersprungen): {e}")
-                settings["timestamp_mode"] = 0
-                settings["enable_current_range_output"] = False
-                if self.device and self.device.is_open:
-                    time.sleep(0.1)
-                    self.device.reset_input_buffer()
-                    self.device.reset_output_buffer()
+            if sync_time_us > 0:
+                try:
+                    sync_payload = struct.pack(">I", int(sync_time_us))
+                    self._send_command(0xB9, sync_payload, timeout=1.5)
+                except Exception as e:
+                    print(f"[HINWEIS] Sync-Time (0xB9) uebersprungen: {e}")
         else:
-            print("[INFO] Medical-Modus: Ueberspringe inaktive 0x97-Optionen (verhindert ACK-Timeout).")
+            # =================================================================
+            # BRANCH 2: STANDARD ISX-3 / ISX-3mini
+            # Only send optional commands if explicitly enabled; protect with try/except
+            # so unsupported firmware options never block the measurement run.
+            # =================================================================
+            self._clear_serial_buffers(delay_s=0.05)
 
-        # DC bias is only used on the main front BNC port
-        if not settings.get("mux_enabled", False):
-            try:
-                bias_payload = bytes([0x33]) + struct.pack(">f", float(bias_voltage_v))
-                self._send_command(self.CMD_SETUP_FREQUENCY, bias_payload, timeout=1.5)
-                self._send_command(self.CMD_SETUP_FREQUENCY, bytes([0x30, 1 if dc_bias_enabled else 0]), timeout=1.5)
-            except Exception as e:
-                print(f"[HINWEIS] DC-Bias Setup uebersprungen: {e}")
+            if timestamp_mode > 0 or enable_current_range_output:
+                try:
+                    if timestamp_mode == 1:
+                        self._send_command(0x97, bytes([0x01, 0x01]), timeout=1.0)
+                    elif timestamp_mode == 2:
+                        self._send_command(0x97, bytes([0x02, 0x01]), timeout=1.0)
+                    if enable_current_range_output:
+                        self._send_command(0x97, bytes([0x04, 0x01]), timeout=1.0)
+                except Exception:
+                    settings["timestamp_mode"] = 0
+                    settings["enable_current_range_output"] = False
+                    self._clear_serial_buffers(delay_s=0.05)
 
-        # Inter-sweep pause (0xB9)
-        if sync_time_us > 0 or "medical" not in self.device_version:
-            try:
-                sync_payload = struct.pack(">I", int(sync_time_us))
-                self._send_command(0xB9, sync_payload, timeout=1.5)
-            except Exception as e:
-                print(f"[HINWEIS] Sync-Time (0xB9) uebersprungen: {e}")
+            if sync_time_us > 0:
+                try:
+                    sync_payload = struct.pack(">I", int(sync_time_us))
+                    self._send_command(0xB9, sync_payload, timeout=1.5)
+                except Exception:
+                    self._clear_serial_buffers(delay_s=0.05)
+
+            if not settings.get("mux_enabled", False) and dc_bias_enabled:
+                try:
+                    bias_payload = bytes([0x33]) + struct.pack(">f", float(bias_voltage_v))
+                    self._send_command(self.CMD_SETUP_FREQUENCY, bias_payload, timeout=1.5)
+                    self._send_command(self.CMD_SETUP_FREQUENCY, bytes([0x30, 0x01]), timeout=1.5)
+                except Exception:
+                    self._clear_serial_buffers(delay_s=0.05)
 
     def set_extension_port(
         self,
@@ -299,11 +345,6 @@ class ISX3:
         is not supported by the current 0xB0 command stack. A future firmware update
         will provide direct hardware register programming (bitmask addressing) to close
         arbitrary relay combinations simultaneously.
-
-        Once the manufacturer releases the register specification:
-        1. Convert ce_pins, re_pins, ws_pins, we_pins into 32-bit/64-bit relay bitmasks.
-        2. Pack the register address and bitmask payload into the new command tag.
-        3. Transmit via self._send_command(...) and verify ACK.
         """
         raise NotImplementedError(
             "Multi-Pin-Parallelschaltung (Electrode Ganging) wird von der aktuellen ISX-3 Firmware "
@@ -327,7 +368,6 @@ class ISX3:
         if custom_pins is not None:
             if isinstance(custom_pins, list):
                 if not self.ENABLE_EXPERIMENTAL_MULTIPIN_STACKING:
-                    # Trigger the register placeholder error when multi-pin lists are passed
                     self.configure_multipin_registers([], [], [], [])
 
                 # --- DEACTIVATED LEGACY MULTI-PIN STACKING (RETAINED FOR REFERENCE) ---
@@ -381,7 +421,10 @@ class ISX3:
     ) -> None:
         """
         Configures the analog frontend via command 0xB0.
-        Distinguishes between the 15-byte Medical protocol and the 4-byte Standard protocol (with 0xB2).
+        Strictly separates:
+        - Medical Research ISX-3: 15-byte 0xB0 packet (without 0xB2)
+        - Standard ISX-3 / ISX-3mini: 4-byte (>BBBB) 0xB0 packet (Channel 1 = BNC, Channel 2 = Ext. MUX)
+          + separate 0xB2 command for external MUX pin routing.
         """
         if int(current_range) not in (0, 1, 2, 4, 6):
             print(f"[WARNUNG] Ungueltiger current_range={current_range}, setze auf 2 (±100 µA).")
@@ -390,10 +433,9 @@ class ISX3:
         if int(voltage_range) not in (1, 2):
             voltage_range = 1
 
-        # Clear previous frontend setup once before applying new assignment
+        # Clear previous frontend channel stack once before applying new assignment
         self._send_command(self.CMD_SETUP_FRONTEND, bytes([0xFF, 0xFF, 0xFF]))
 
-        # Normalize pin configuration
         if self.active_mux_pins is not None:
             if isinstance(self.active_mux_pins, list):
                 if not self.ENABLE_EXPERIMENTAL_MULTIPIN_STACKING:
@@ -405,12 +447,12 @@ class ISX3:
             pin_tuples = []
 
         if "medical" in self.device_version:
+            # =================================================================
+            # BRANCH 1: MEDICAL RESEARCH ISX-3 (15-Byte 0xB0 Protocol)
+            # =================================================================
             header = struct.pack(">BBB", int(measurement_mode), int(current_range), int(voltage_range))
-
             if pin_tuples:
                 chan_type = int(measurement_channel) if int(measurement_channel) in (2, 3) else 3
-                # In normal operation pin_tuples contains exactly 1 tuple (ce, re, ws, we).
-                # Legacy stacking loop is preserved for reference.
                 for ce, re, ws, we in pin_tuples:
                     if measurement_mode == 1:
                         ch_settings = struct.pack(">BHBH", chan_type, ce, chan_type, we)
@@ -418,11 +460,7 @@ class ISX3:
                         ch_settings = struct.pack(">BHBHBH", chan_type, ce, chan_type, re, chan_type, we)
                     else:
                         ch_settings = struct.pack(
-                            ">BHBHBHBH",
-                            chan_type, ce,
-                            chan_type, re,
-                            chan_type, ws,
-                            chan_type, we,
+                            ">BHBHBHBH", chan_type, ce, chan_type, re, chan_type, ws, chan_type, we
                         )
                     self._send_command(self.CMD_SETUP_FRONTEND, header + ch_settings)
             else:
@@ -438,13 +476,21 @@ class ISX3:
 
             time.sleep(max(0.08, float(switch_delay)))
         else:
-            # Standard mode: 4-byte frontend command + routing via command 0xB2
+            # =================================================================
+            # BRANCH 2: STANDARD ISX-3 / ISX-3mini (Short 4-Byte >BBBB 0xB0 + 0xB2)
+            # Standard device only has Main Port (1) and External MUX Port (2)!
+            # =================================================================
+            std_chan = 2 if (self.active_mux_pins is not None or int(measurement_channel) >= 2) else 1
             fe_payload = struct.pack(
-                ">BBBB", int(measurement_mode), int(measurement_channel), int(current_range), int(voltage_range)
+                ">BBBB",
+                int(measurement_mode),
+                int(std_chan),
+                int(current_range),
+                int(voltage_range),
             )
             self._send_command(self.CMD_SETUP_FRONTEND, fe_payload)
 
-            if pin_tuples:
+            if self.active_mux_pins is not None:
                 for ce, re, ws, we in pin_tuples:
                     self.set_extension_port(ce, re, ws, we)
                 time.sleep(max(0.08, float(switch_delay)))
@@ -469,8 +515,12 @@ class ISX3:
         return eops
 
     def set_frequency_setup(self, current_setup: dict) -> None:
-        """Configures a single discrete frequency point (0xB6 Sub 0x02)."""
-        self.device_version = str(current_setup.get("device_version", self.device_version)).strip().lower()
+        """
+        Configures a single discrete frequency point (0xB6 Sub 0x02).
+        Strictly separates Medical Research ISX-3 and Standard ISX-3 behavior.
+        """
+        raw_ver = current_setup.get("device_version", self.device_version)
+        self.device_version = str(raw_ver if raw_ver else "standard").strip().lower()
         measurement_mode = int(current_setup.get("measurement_mode", 2))
         measurement_channel = int(current_setup.get("measurement_channel", 1))
         current_range = int(current_setup.get("current_range", 2))
@@ -478,34 +528,53 @@ class ISX3:
 
         frequency = float(current_setup["frequency"])
         precision = float(current_setup.get("precision", 1.0))
-
         raw_amplitude = float(current_setup.get("amplitude", 0.0001))
-        # In Medical mode: automatically halve peak-to-peak (App/Vpp) to peak (Ap/Vp) for firmware
-        amplitude = raw_amplitude * 0.5 if "medical" in self.device_version else raw_amplitude
-
         excitation_type = int(current_setup.get("excitation_type", 2))
         point_delay_us = int(current_setup.get("point_delay_us", 0))
         phase_sync = bool(current_setup.get("phase_sync", False))
 
-        self._send_command(self.CMD_SETUP_FREQUENCY, bytes([0x01]))
-
-        self._apply_frontend_and_routing(
-            measurement_mode=measurement_mode,
-            measurement_channel=measurement_channel,
-            current_range=current_range,
-            voltage_range=voltage_range,
-            switch_delay=0.02,
-        )
-
-        eops = self._build_extended_options(
-            point_delay_us=point_delay_us,
-            phase_sync=phase_sync,
-            excitation_type=excitation_type,
-            frequency_hz=frequency,
-        )
-
-        freq_payload = bytes([0x02]) + struct.pack(">fff", frequency, precision, amplitude) + eops
-        self._send_command(self.CMD_SETUP_FREQUENCY, freq_payload)
+        if "medical" in self.device_version:
+            # =================================================================
+            # BRANCH 1: MEDICAL RESEARCH ISX-3 (Preserved 1:1)
+            # =================================================================
+            amplitude = raw_amplitude * 0.5
+            self._send_command(self.CMD_SETUP_FREQUENCY, bytes([0x01]))
+            self._apply_frontend_and_routing(
+                measurement_mode=measurement_mode,
+                measurement_channel=measurement_channel,
+                current_range=current_range,
+                voltage_range=voltage_range,
+                switch_delay=0.02,
+            )
+            eops = self._build_extended_options(
+                point_delay_us=point_delay_us,
+                phase_sync=phase_sync,
+                excitation_type=excitation_type,
+                frequency_hz=frequency,
+            )
+            freq_payload = bytes([0x02]) + struct.pack(">fff", frequency, precision, amplitude) + eops
+            self._send_command(self.CMD_SETUP_FREQUENCY, freq_payload)
+        else:
+            # =================================================================
+            # BRANCH 2: STANDARD ISX-3 / ISX-3mini (Classic single-point setup)
+            # =================================================================
+            amplitude = raw_amplitude
+            self._send_command(self.CMD_SETUP_FREQUENCY, bytes([0x01]))
+            self._apply_frontend_and_routing(
+                measurement_mode=measurement_mode,
+                measurement_channel=measurement_channel,
+                current_range=current_range,
+                voltage_range=voltage_range,
+                switch_delay=0.02,
+            )
+            eops = self._build_extended_options(
+                point_delay_us=point_delay_us,
+                phase_sync=phase_sync,
+                excitation_type=excitation_type,
+                frequency_hz=frequency,
+            )
+            freq_payload = bytes([0x02]) + struct.pack(">fff", frequency, precision, amplitude) + eops
+            self._send_command(self.CMD_SETUP_FREQUENCY, freq_payload)
 
     def configure_hardware_sweep(
         self,
@@ -513,50 +582,92 @@ class ISX3:
         global_settings: dict,
         switch_delay_s: float = 0.10,
     ) -> None:
-        """Configures hardware-controlled multi-block frequency sweeps (0xB6 Sub 0x03)."""
-        self.device_version = str(global_settings.get("device_version", self.device_version)).strip().lower()
+        """
+        Configures hardware-controlled multi-block frequency sweeps (0xB6 Sub 0x03).
+        Strictly separates Medical Research ISX-3 and Standard ISX-3 / ISX-3mini.
+        """
+        raw_ver = global_settings.get("device_version", self.device_version)
+        self.device_version = str(raw_ver if raw_ver else "standard").strip().lower()
         measurement_mode = int(global_settings.get("measurement_mode", 2))
         measurement_channel = int(global_settings.get("measurement_channel", 1))
         current_range = int(global_settings.get("current_range", 2))
         voltage_range = int(global_settings.get("voltage_range", 1))
         switch_delay = float(global_settings.get("switch_delay_s", switch_delay_s))
 
-        self._send_command(self.CMD_SETUP_FREQUENCY, bytes([0x01]))
+        if "medical" in self.device_version:
+            # =================================================================
+            # BRANCH 1: MEDICAL RESEARCH ISX-3 (Preserved 1:1)
+            # =================================================================
+            self._send_command(self.CMD_SETUP_FREQUENCY, bytes([0x01]))
 
-        for block in blocks:
-            start_f = float(block["start_frequency_hz"])
-            stop_f = float(block["stop_frequency_hz"])
-            count = float(block["count"])
-            scale_flag = 1 if str(block["scale"]).strip().lower() == "logarithmic" else 0
-            precision = float(block["precision"])
+            for block in blocks:
+                start_f = float(block["start_frequency_hz"])
+                stop_f = float(block["stop_frequency_hz"])
+                count = float(block["count"])
+                scale_flag = 1 if str(block["scale"]).strip().lower() == "logarithmic" else 0
+                precision = float(block["precision"])
+                amplitude = float(block["amplitude"]) * 0.5
+                excitation_type = int(block["excitation_type"])
+                point_delay_us = int(block["point_delay_us"])
+                phase_sync = bool(block["phase_sync"])
 
-            raw_amplitude = float(block["amplitude"])
-            amplitude = raw_amplitude * 0.5 if "medical" in self.device_version else raw_amplitude
+                eops = self._build_extended_options(
+                    point_delay_us=point_delay_us,
+                    phase_sync=phase_sync,
+                    excitation_type=excitation_type,
+                    frequency_hz=stop_f,
+                )
+                sweep_payload = (
+                    bytes([0x03])
+                    + struct.pack(">fffBff", start_f, stop_f, count, scale_flag, precision, amplitude)
+                    + eops
+                )
+                self._send_command(self.CMD_SETUP_FREQUENCY, sweep_payload)
 
-            excitation_type = int(block["excitation_type"])
-            point_delay_us = int(block["point_delay_us"])
-            phase_sync = bool(block["phase_sync"])
-
-            eops = self._build_extended_options(
-                point_delay_us=point_delay_us,
-                phase_sync=phase_sync,
-                excitation_type=excitation_type,
-                frequency_hz=stop_f,
+            self._apply_frontend_and_routing(
+                measurement_mode=measurement_mode,
+                measurement_channel=measurement_channel,
+                current_range=current_range,
+                voltage_range=voltage_range,
+                switch_delay=switch_delay,
             )
-            sweep_payload = (
-                bytes([0x03])
-                + struct.pack(">fffBff", start_f, stop_f, count, scale_flag, precision, amplitude)
-                + eops
-            )
-            self._send_command(self.CMD_SETUP_FREQUENCY, sweep_payload)
+        else:
+            # =================================================================
+            # BRANCH 2: STANDARD ISX-3 / ISX-3mini
+            # =================================================================
+            self._send_command(self.CMD_SETUP_FREQUENCY, bytes([0x01]))
 
-        self._apply_frontend_and_routing(
-            measurement_mode=measurement_mode,
-            measurement_channel=measurement_channel,
-            current_range=current_range,
-            voltage_range=voltage_range,
-            switch_delay=switch_delay,
-        )
+            for block in blocks:
+                start_f = float(block["start_frequency_hz"])
+                stop_f = float(block["stop_frequency_hz"])
+                count = float(block["count"])
+                scale_flag = 1 if str(block["scale"]).strip().lower() == "logarithmic" else 0
+                precision = float(block["precision"])
+                amplitude = float(block["amplitude"])
+                excitation_type = int(block["excitation_type"])
+                point_delay_us = int(block["point_delay_us"])
+                phase_sync = bool(block["phase_sync"])
+
+                eops = self._build_extended_options(
+                    point_delay_us=point_delay_us,
+                    phase_sync=phase_sync,
+                    excitation_type=excitation_type,
+                    frequency_hz=stop_f,
+                )
+                sweep_payload = (
+                    bytes([0x03])
+                    + struct.pack(">fffBff", start_f, stop_f, count, scale_flag, precision, amplitude)
+                    + eops
+                )
+                self._send_command(self.CMD_SETUP_FREQUENCY, sweep_payload)
+
+            self._apply_frontend_and_routing(
+                measurement_mode=measurement_mode,
+                measurement_channel=measurement_channel,
+                current_range=current_range,
+                voltage_range=voltage_range,
+                switch_delay=switch_delay,
+            )
 
     def start_measurement(
         self, spectra: int, id: int, measurement_settings: dict, expected_frames: int | None = None
@@ -581,7 +692,10 @@ class ISX3:
                     time.sleep(0.1)
             except KeyboardInterrupt:
                 pass
-            self.stop_measurement()
+            stop_frame = bytes([self.CMD_MEASURE, 0x01, 0x00, self.CMD_MEASURE])
+            self.device.write(stop_frame)
+            self.device.flush()
+            self._clear_serial_buffers(delay_s=0.10)
             print("[INFO] Kontinuierliche Messung gestoppt.")
             return {
                 "id": [], "real": [], "imag": [], "timestamp": [],
@@ -605,7 +719,6 @@ class ISX3:
                 measurement_settings=measurement_settings,
             )
         finally:
-            # Guarantee that the ISX-3 exits measurement mode after reading frames
             self.stop_measurement()
 
     def read_measurement_data(
