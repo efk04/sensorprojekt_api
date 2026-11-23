@@ -4,6 +4,10 @@ venv/
 env/
 isx3_api/.venv/
 
+# Editor / IDE (VS Code)
+.vscode/
+**/.vscode/
+
 # Messdaten & HDF5-Dateien
 measurements/
 **/measurements/
