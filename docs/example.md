@@ -1,43 +1,147 @@
-# Example
+# Examples: Main Port & MUX32 Control
 
-In order to use the isx3_api, you first have to install the package and then import it in your code. The installation is documented in its own chapter under *Getting Started*.
+`isx3_api` can be controlled via `.ini` configuration files or directly in Python. Below are two complete examples covering **Main Port (Front-BNC)** measurements and **MUX32 multiplexer** multi-sensor sweeps.
 
-We then start by importing the main function *Measurement* into our code.
-```python
-from isx3_api import Measurement
-```
+---
 
-When calling the *Measurement* function, we have the option to give it a relative filepath to our desired *config.ini*. There we configure all options for our measurement. If no filepath is given, the function will open a file dialog to ask for a config.
+## Example 1: Main Port Measurement (Multi-Block Front-BNC Sweep)
 
-For this example, we will mostly use the standard configuration as given in *tests/config_example.ini*.
+### 1. Configuration File (`config/example_main.ini`)
 
-We want to see the measured values in a Bode plot, and we only want to measure once (no continuous measurement). Both can be configured under *[ApiSettings]*.
-```text
+This example configures a **Standard ISX-3** on `COM12` to run a 2-block hardware sweep (`0xB6 Sub 0x03`) over the Front-BNC port in 4-point Kelvin mode (`measurement_mode = 2`):
+- **Block 1 (`100 Hz` – `10 kHz`):** Current excitation (`excitation_type = 2`) with `100 µA Peak` (`0.0001`).
+- **Block 2 (`10 kHz` – `1 MHz`):** Voltage excitation (`excitation_type = 1`) with `100 mV Peak` (`0.1`).
+
+```ini
+[Connection]
+device_version = standard
+port = COM12
+baudrate = 115200
+
+[MUX]
+enabled = False
+
+[Frontend]
+measurement_mode = 2
+measurement_channel = 1
+current_range = 2
+voltage_range = 1
+
+[FrequencySetup]
+mode = sweep
+point_delay_ms = 20.0
+phase_sync = False
+
+[FrequencyBlocks]
+block_1_start = 100.0
+block_1_stop = 10000.0
+block_1_steps = 11
+block_1_scale = logarithmic
+block_1_precision = 1.0
+block_1_exc_type = 2
+block_1_amplitude = 0.0001
+
+block_2_start = 10000.0
+block_2_stop = 1000000.0
+block_2_steps = 11
+block_2_scale = logarithmic
+block_2_precision = 1.0
+block_2_exc_type = 1
+block_2_amplitude = 0.1
+
+[Options]
+timestamp_mode = 1
+enable_current_range_output = False
+
+[Measurement]
+number_of_spectra = 3
+
 [ApiSettings]
 plot_type = bode
-continuous_measurement = False
+live_plot_enabled = True
+live_plot_mode = point
 ```
 
-Depending on your PC, you may have to change the *port* setting under *[Connection]*. On Windows, you can check which port is used in the Device Manager. The baud rate is fixed by the ISX device at *115200*.
-```text
+### 2. Python Execution
+
+```python
+from isx3_api import Measurement
+
+meas = Measurement()
+h5_file = meas.measurement(config_path="config/example_main.ini")
+print(f"Results saved to: {h5_file}")
+```
+
+---
+
+## Example 2: MUX32 Multiplexer Control (Multi-Sensor & Custom Pins)
+
+When `[MUX]` is enabled, `isx3_api` routes each active sensor sequentially before executing the configured frequency sweep:
+- **`device_version = medical`**: Uses the 15-byte `0xB0` protocol (internal MUX port `3` or external MUX port `2`) and automatically halves Peak-to-Peak inputs (`App` / `Vpp`) for the firmware.
+- **`device_version = standard`**: Uses the 4-byte `0xB0` protocol + separate `0xB2` routing command (external MUX port `2`) with 1:1 Peak inputs (`A` / `V`).
+- **`active_sensors`**:
+  - Automatic numbering: `1-4` (4-wire: Sensor 1 $\rightarrow$ pins `1,2,3,4`; Sensor 2 $\rightarrow$ `5,6,7,8`, etc.).
+  - Custom pin routing (`CE, RE, WS, WE`): `1: 1,1,2,2; 2: 22,22,23,23` (e.g., Sensor 1 on pins 1/2 and the internal $2\,\text{k}\Omega$ reference resistor on pins 22/23).
+
+### 1. Configuration File (`config/example_mux.ini`)
+
+```ini
 [Connection]
-interface_type = COM
-port = COM4
+device_version = medical
+port = COM12
 baudrate = 115200
-```
 
-For the *FrequencySetup*, we are setting up the *auto* mode. It takes a start and a stop frequency as well as a count for how many frequency points lie in between. It generates a frequency list from these values. The list can use linear or logarithmic scaling.
-```text
+[MUX]
+enabled = True
+mode = 4
+channel = 3
+active_sensors = 1: 1,1,2,2; 2: 22,22,23,23
+switch_delay_s = 0.10
+
+[Frontend]
+measurement_mode = 2
+measurement_channel = 3
+current_range = 2
+voltage_range = 1
+
 [FrequencySetup]
-mode = auto
+mode = sweep
+point_delay_ms = 20.0
+phase_sync = False
 
-frequency_hz = 1000.0, 5000.0
-precision = 1.0
+[FrequencyBlocks]
+block_1_start = 100.0
+block_1_stop = 1000000.0
+block_1_steps = 21
+block_1_scale = logarithmic
+block_1_precision = 1.0
+block_1_exc_type = 2
+block_1_amplitude = 0.0001
 
-start_frequency_hz = 100.0
-stop_frequency_hz = 100000.0
-count = 10
-scale = logarithmic
+[Options]
+timestamp_mode = 1
+enable_current_range_output = False
+
+[Measurement]
+number_of_spectra = 3
+
+[ApiSettings]
+plot_type = bode
+live_plot_enabled = True
+live_plot_mode = sweep
 ```
 
-Now we can start measuring.
+### 2. Python Execution with Pre-Measurement Drift Check
+
+```python
+from isx3_api import ISX3, Measurement
+
+# Verify thermal stability on the internal 2 kOhm reference (pins 22,22,23,23 on MUX port 3)
+diag = ISX3()
+report = diag.run_baseline_drift_check(port="COM12", baudrate=115200, mux_channel=3)
+
+if report["stable"]:
+    Measurement().measurement(config_path="config/example_mux.ini")
+else:
+    print(f"Drift too high ({report['drift_pct']:.3f} %) - let device warm up first.")
+```

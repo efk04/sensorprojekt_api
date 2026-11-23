@@ -22,7 +22,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-DEFAULT_H5_DIR = r"C:\Users\lukas\Documents\GitHub\sensorprojekt_api\isx3_api\measurements"
+DEFAULT_H5_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "measurements"))
 
 CR_LABELS = {
     0: "Autoranging",
