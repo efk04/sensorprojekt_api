@@ -1,15 +1,21 @@
-#folders
-__pycache__/
-isx3.venv/
+# Virtuelle Umgebungen (sowohl im Root als auch in Unterordnern)
+.venv/
+venv/
+env/
+isx3_api/.venv/
+
+# Messdaten & HDF5-Dateien
 measurements/
-isx3_api.egg-info/
-_build/
-
-#datatype
+**/measurements/
 *.h5
-*.png
+*.hdf5
 
+# Python Cache & Build-Artefakte
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
 
-
-#files
-test_config.py
+# Temporäre Mess-Konfiguration
+**/temp_run.ini
