@@ -76,7 +76,7 @@ print(f"Results saved to: {h5_file}")
 
 ## Example 2: MUX32 Multiplexer Control (Multi-Sensor & Custom Pins)
 
-When `[MUX]` is enabled, `isx3_api` routes each active sensor sequentially before executing the configured frequency sweep:
+When `[MUX]` is enabled, `isx3_api` routes each active sensor sequentially before running the configured frequency sweep:
 - **`device_version = medical`**: Uses the 15-byte `0xB0` protocol (internal MUX port `3` or external MUX port `2`) and automatically halves Peak-to-Peak inputs (`App` / `Vpp`) for the firmware.
 - **`device_version = standard`**: Uses the 4-byte `0xB0` protocol + separate `0xB2` routing command (external MUX port `2`) with 1:1 Peak inputs (`A` / `V`).
 - **`active_sensors`**:
