@@ -1,356 +1,162 @@
 """
-Class that contains plot templates for the live plot:
+plot_templates.py - Visualization templates for Electrochemical Impedance Spectroscopy (EIS).
 
-- Impedance-frequency plot
-- Nyquist plot
-- Bode plot
+Provides plotting templates for Bode (logarithmic and linear), Nyquist, and
+impedance-over-frequency diagrams.
 """
-#Imports
-import matplotlib.pyplot as plt
+
 import math
+import matplotlib.pyplot as plt
+
 
 class PlotTemplates:
-    """
-    Plot templates for the live plot of the measurement results.
-
-    The newest results are drawn in color, the results of the last
-    (up to 5) complete measurement cycles are drawn in gray.
-
-    All plot methods take the same arguments:
-
-    - ``live_results`` (dict): Newest results with the keys ``id``, ``real``,
-      ``imag`` and ``frequencies``.
-    - ``current_results`` (list[dict]): All results of the current measurement cycle.
-    - ``len_measurement_queue`` (int): Number of measurement setups per cycle.
-    """
+    """Manages and renders live and historical impedance diagrams."""
 
     def __init__(self):
-        self.past_icm = 1 
-        
-        self.fig = None
-        self.ax1 = None
-        self.ax2 = None
-        self.line_mag = None
-        self.line_phase = None
-
-        #live results
+        self.frequencies = []
         self.real = []
         self.imag = []
-        self.frequencies = []
+        self.freq_id = []
 
-        #past results
         self.past_results = []
-        self.past_id = []
+        self.past_frequencies = []
         self.past_real = []
         self.past_imag = []
-        self.past_frequencies = []
 
-        #plot impedance-frequency
-        self.fig_imp = None
-        self.ax_imp = None
-        self.line_real = None
-        self.line_imag = None
-        self.line_past_real = None
-        self.line_past_imag = None
-        self._imp_shown = False
-
-        #plot nyqhist
-        # __init__
-        self.fig_nyq = None
-        self.ax_nyq = None
-        self.line_nyq = None
-        self.line_past_nyq = None
-        self._nyq_shown = False
-
-
-    def processing_results(self,test_current_id, live_results, current_results, len_measurement_queue):
-        """
-        Prepares the live results and the past results for plotting.
-
-        When a measurement cycle is complete, it is added to the past results
-        (only the last 5 cycles are kept).
-
-        Args:
-            live_results (dict): Newest results (keys ``id``, ``real``, ``imag``, ``frequencies``).
-            current_results (list[dict]): All results of the current measurement cycle.
-            len_measurement_queue (int): Number of measurement setups per cycle.
-        """
-        #process results liveplot
-        """
-        self.real = live_results["real"]
-        self.imag = live_results["imag"]
-        self.frequencies = live_results["frequencies"]
-        """
-
-        #check current id
-        self.current_id = live_results["current_id"][0]
-        icm = self.current_id.split(".")[0] 
-        #icm = test_current_id.split(".")[0]
-
-        if icm != self.past_icm:
-            self.real = []
-            self.imag = []
-            self.frequencies = []
-            self.past_icm = icm
-
-        #test
-        self.real.extend(live_results["real"])
-        self.imag.extend(live_results["imag"])
-        #self.frequencies.append(live_results["frequencies"]) test
-        self.frequencies.append(live_results["frequencies"])
-
-        #process past results
-        if len(current_results) == len_measurement_queue:
-            self.past_results.append(current_results)
-
-            if len(self.past_results)>0: #if there are last results
-                  
-                if len(self.past_results)>5: #show only the last 5 results
-                    del self.past_results[0]  
-
-                #clear old results
-                self.past_id = []
-                self.past_real = []
-                self.past_imag = []
-                self.past_frequencies = []
-
-                for sublist in self.past_results:
-                # read every dict in the sublist and extend the corresponding lists
-                    for item in sublist:
-
-                        if 'id' in item:
-                            self.past_id.extend(item['id'])
-                        if 'real' in item:
-                            self.past_real.extend(item['real'])
-                        if 'imag' in item:
-                            self.past_imag.extend(item['imag'])
-                        if 'frequencies' in item:
-                            self.past_frequencies.extend([item['frequencies']]) #test
-    
-    def _init_impedance_plot(self):
-        """
-        initializes the impedance-frequency plot with two lines: real and imaginary part of the impedance.
-        The figure is created once; afterwards only the data of the lines is replaced.
-        """
-        with plt.ioff():   
-            self.fig_imp, self.ax_imp = plt.subplots(figsize=(12, 6))
-        self._imp_shown = False
-
-        #past results
-        self.line_past_real, = self.ax_imp.plot([], [], 'o', color='gray', alpha=0.3, markersize=4)
-        self.line_past_imag, = self.ax_imp.plot([], [], 's', color='gray', alpha=0.3, markersize=4)
-        self.line_past_mag, = self.ax_imp.plot([], [], 'd', color='gray', alpha=0.3, markersize=4)
-
-        #live results
-        self.line_real, = self.ax_imp.plot([], [], 'o-', color='r', label=r'$Z_{real}$')
-        self.line_imag, = self.ax_imp.plot([], [], 's-', color='b', label=r'$Z_{imag}$')
-        self.line_mag, = self.ax_imp.plot([], [], 'd-', color='g', label=r'$Z_{mag}$')
-
-        # Set log scale for x-axis and labels
-        self.ax_imp.set_xscale('log')
-        self.ax_imp.set_xlabel('Frequency $f$ / Hz')
-        self.ax_imp.set_ylabel(r'Impedance $Z$ / $\Omega$')
-        self.ax_imp.set_title('Impedance as a Function of Frequency')
-        self.ax_imp.grid(True, which='both', ls='--', alpha=0.3)
-        self.ax_imp.tick_params(direction='in', which='both', top=True, right=True)
-
-        #set legend
-        self.fig_imp.legend(
-            handles=[self.line_real, self.line_imag, self.line_mag],
-            loc='center left', bbox_to_anchor=(0.8, 0.5),
-            title='Legend', frameon=True,
-        )
-        self.fig_imp.subplots_adjust(right=0.78)
-
-
-    def impedance_frequency(self, test_current_id, live_results, current_results, len_measurement_queue):
-        """
-        Plots the real and imaginary part of the impedance over the frequency (log scale).
-        The figure is created once; afterwards only the data of the lines is replaced.
-
-        Args:
-            live_results (dict): Newest results (keys ``id``, ``real``, ``imag``, ``frequencies``).
-            current_results (list[dict]): All results of the current measurement cycle.
-            len_measurement_queue (int): Number of measurement setups per cycle.
-        """
-        # get processed data
-        self.processing_results(test_current_id=test_current_id, live_results=live_results,
-                                current_results=current_results,
-                                len_measurement_queue=len_measurement_queue)
-
-        # Only create the figure if it doesn't exist or has been closed
-        if self.fig_imp is None or not plt.fignum_exists(self.fig_imp.number):
-            self._init_impedance_plot()
-
-        # live results
-        self.line_real.set_data(self.frequencies, self.real)
-        self.line_imag.set_data(self.frequencies, self.imag)
-        #magnitude of impedance
-        impedance = [math.hypot(r, i) for r, i in zip(self.real, self.imag)]
-        self.line_mag.set_data(self.frequencies, impedance)
-
-        # past results
-        if self.past_real:
-            self.line_past_real.set_data(self.past_frequencies, self.past_real)
-            self.line_past_imag.set_data(self.past_frequencies, self.past_imag)
-            past_impedance = [math.hypot(r, i) for r, i in zip(self.past_real, self.past_imag)]
-            self.line_past_mag.set_data(self.past_frequencies, past_impedance)
+    def _flatten(self, item_or_list):
+        """Recursively flattens nested lists or tuples."""
+        flat = []
+        if isinstance(item_or_list, (list, tuple)):
+            for element in item_or_list:
+                flat.extend(self._flatten(element))
         else:
-            self.line_past_real.set_data([], [])
-            self.line_past_imag.set_data([], [])
-            self.line_past_mag.set_data([], [])
+            flat.append(item_or_list)
+        return flat
 
-        #autoscale
-        self.ax_imp.relim()
-        self.ax_imp.autoscale_view()
+    def processing_results(self, live_results: dict, current_results: list[dict], len_measurement_queue: int) -> None:
+        """Processes raw measurement data and maintains a history of the last 5 sweeps."""
+        self.freq_id = self._flatten(live_results.get("id", []))
+        self.real = self._flatten(live_results.get("real", []))
+        self.imag = self._flatten(live_results.get("imag", []))
+        self.frequencies = self._flatten(live_results.get("frequencies", []))
 
-        #
-        self.fig_imp.canvas.draw()
-        """        if not self._imp_shown:
-            self.fig_imp.show()
-            self._imp_shown = True"""
+        if len(current_results) == len_measurement_queue and len_measurement_queue > 0:
+            self.past_results.append(list(current_results))
 
-        self.fig_imp.canvas.flush_events()
+            if len(self.past_results) > 5:
+                self.past_results.pop(0)
 
-    def _init_nyquist_plot(self):
-        """
-        initializes nyqhist plot 
-        """
-        with plt.ioff():   
-            self.fig_nyq, self.ax_nyq = plt.subplots(figsize=(10, 7))
-        self._nyq_shown = False
+            self.past_frequencies = []
+            self.past_real = []
+            self.past_imag = []
 
-        #past results
-        self.line_past_nyq, = self.ax_nyq.plot([], [], 'o', color='gray', alpha=0.3, markersize=4)
+            for cycle in self.past_results:
+                for point in cycle:
+                    if "frequencies" in point:
+                        self.past_frequencies.extend(self._flatten(point["frequencies"]))
+                    if "real" in point:
+                        self.past_real.extend(self._flatten(point["real"]))
+                    if "imag" in point:
+                        self.past_imag.extend(self._flatten(point["imag"]))
 
-        #live results
-        self.line_nyq, = self.ax_nyq.plot([], [], 'o-', color='b',
-                                        label=r'$Z_{imag}$ vs $Z_{real}$')
+    def impedance_frequency(self, live_results: dict, current_results: list[dict], len_measurement_queue: int) -> None:
+        """Plots real and imaginary parts over frequency."""
+        self.processing_results(live_results, current_results, len_measurement_queue)
 
-        #plot format
-        self.ax_nyq.set_xlabel(r'Real part $Z_{real}$ / $\Omega$')
-        self.ax_nyq.set_ylabel(r'Imaginary part $Z_{imag}$ / $\Omega$')
-        self.ax_nyq.set_title('Nyquist Plot')
-        self.ax_nyq.axhline(0, color='black', linewidth=0.8, linestyle='-')
-        self.ax_nyq.axvline(0, color='black', linewidth=0.8, linestyle='-')
-        #Important for Nyquist-Plot: keep equal ratio of Y- and X-Axis
-        self.ax_nyq.set_aspect('equal', adjustable='box')
-        self.ax_nyq.grid(True, which='both', ls='--', alpha=0.3)
-        self.ax_nyq.tick_params(direction='in', which='both', top=True, right=True)
+        fig = plt.gcf()
+        fig.clf()
+        ax = fig.add_subplot(111)
 
-        # Legend
-        self.fig_nyq.legend(
-            handles=[self.line_nyq],
-            loc='center left', bbox_to_anchor=(0.8, 0.5),
-            title='Legend', frameon=True,
-        )
-        self.fig_nyq.subplots_adjust(right=0.78)
+        if self.past_real and len(self.past_frequencies) == len(self.past_real):
+            ax.plot(self.past_frequencies, self.past_real, "o", color="gray", alpha=0.25, markersize=4)
+            ax.plot(self.past_frequencies, self.past_imag, "s", color="gray", alpha=0.25, markersize=4)
 
+        line_real, = ax.plot(self.frequencies, self.real, "ro-", label=r"$Z_{\mathrm{real}}$")
+        line_imag, = ax.plot(self.frequencies, self.imag, "bs-", label=r"$Z_{\mathrm{imag}}$")
 
-    def nyquist(self, test_current_id, live_results, current_results, len_measurement_queue):
-        """
-        Plots a Nyquist plot (imaginary part over real part, equal axis scaling).
-        The figure is created once; afterwards only the data of the lines is replaced.
+        ax.set_xscale("log")
+        ax.set_xlabel("Frequenz $f$ / Hz")
+        ax.set_ylabel(r"Impedanz $Z$ / $\Omega$")
+        ax.set_title("Impedanz ueber Frequenz")
+        ax.grid(True, which="both", linestyle="--", alpha=0.3)
+        ax.tick_params(direction="in", which="both", top=True, right=True)
 
-        Args:
-            test_current_id (str): Id of the current measurement point (e.g. ``"1.5"``).
-            live_results (dict): Newest results (keys ``id``, ``real``, ``imag``, ``frequencies``).
-            current_results (list[dict]): All results of the current measurement cycle.
-            len_measurement_queue (int): Number of measurement setups per cycle.
-        """
-        # get processed data
-        self.processing_results(test_current_id=test_current_id, live_results=live_results,
-                                current_results=current_results,
-                                len_measurement_queue=len_measurement_queue)
+        ax.legend(handles=[line_real, line_imag], loc="upper right", frameon=True)
+        fig.tight_layout()
 
-        # only create the figure if it doesn't exist or has been closed
-        if self.fig_nyq is None or not plt.fignum_exists(self.fig_nyq.number):
-            self._init_nyquist_plot()
+    def nyquist(self, live_results: dict, current_results: list[dict], len_measurement_queue: int) -> None:
+        """Plots the Nyquist diagram (real part on X-axis, imaginary part on Y-axis)."""
+        self.processing_results(live_results, current_results, len_measurement_queue)
 
-        # live results: Z_imag over Z_real
-        self.line_nyq.set_data(self.real, self.imag)
+        fig = plt.gcf()
+        fig.clf()
+        ax = fig.add_subplot(111)
 
-        # past results
-        if self.past_real:
-            self.line_past_nyq.set_data(self.past_real, self.past_imag)
-        else:
-            self.line_past_nyq.set_data([], [])
+        if self.past_real and len(self.past_real) == len(self.past_imag):
+            ax.plot(self.past_real, self.past_imag, "o", color="gray", alpha=0.25, markersize=4)
 
-        # autoscale
-        self.ax_nyq.relim()
-        self.ax_nyq.autoscale_view()
+        line_nyquist, = ax.plot(self.real, self.imag, "bo-", label="Aktuelle Messung")
 
-        #draw fig
-        self.fig_nyq.canvas.draw()
-        self.fig_nyq.canvas.flush_events()
+        ax.set_xlabel(r"Realteil $Z_{\mathrm{real}}$ / $\Omega$")
+        ax.set_ylabel(r"Imaginaerteil $Z_{\mathrm{imag}}$ / $\Omega$")
+        ax.set_title("Nyquist-Diagramm")
 
-    def _init_bode_plot(self):
-        """
-        initializes the Bode plot with two subplots: magnitude and phase.
-        
-        """
-        self.fig_bode, (self.ax_mag_bode, self.ax_phase_bode) = plt.subplots(
-            2, 1, sharex=True, figsize=(10, 6),
-            gridspec_kw={'height_ratios': [1, 1], 'hspace': 0.08},
-        )
+        ax.axhline(0, color="black", linewidth=0.8, linestyle=":")
+        ax.axvline(0, color="black", linewidth=0.8, linestyle=":")
 
-        self.line_past_mag, = self.ax_mag_bode.plot([], [], 'o', color='gray', alpha=0.3, markersize=4)
-        self.line_past_phase, = self.ax_phase_bode.plot([], [], 's', color='gray', alpha=0.3, markersize=4)
-        self.line_mag, = self.ax_mag_bode.plot([], [], '-o', color='b', label=r'Impedance $|Z|$')
-        self.line_phase, = self.ax_phase_bode.plot([], [], '-s', color='r', label=r'Phase $\phi$')
+        ax.set_aspect("equal", adjustable="datalim")
+        ax.grid(True, which="both", linestyle="--", alpha=0.3)
+        ax.tick_params(direction="in", which="both", top=True, right=True)
 
-        self.ax_mag_bode.set_title('Bode Plot')
-        self.ax_mag_bode.set_ylabel(r'Magnitude $|Z|$ ($\Omega$)')
-        self.ax_mag_bode.set_xscale('log')
-        self.ax_mag_bode.ticklabel_format(axis='y', style='plain', useOffset=False)
+        ax.legend(handles=[line_nyquist], loc="upper right", frameon=True)
+        fig.tight_layout()
 
-        self.ax_phase_bode.set_ylim(-190, 190)
-        self.ax_phase_bode.set_yticks(range(-180, 181, 90))
-        self.ax_phase_bode.set_xlabel('Frequency $f$ (Hz)')
-        self.ax_phase_bode.set_ylabel(r'Phase $\phi$ (degrees)')
+    def bode(
+        self,
+        live_results: dict,
+        current_results: list[dict],
+        len_measurement_queue: int,
+        linear_y: bool = False,
+    ) -> None:
+        """Plots the Bode diagram (magnitude |Z| and phase over frequency)."""
+        self.processing_results(live_results, current_results, len_measurement_queue)
 
-        for ax in (self.ax_mag_bode, self.ax_phase_bode):
-            ax.grid(True, which='both', alpha=0.3)
-            ax.tick_params(which='both', direction='in', top=True, right=True)
+        fig = plt.gcf()
+        fig.clf()
 
-        self.fig_bode.legend(
-            handles=[self.line_mag, self.line_phase],
-            loc='center left', bbox_to_anchor=(0.8, 0.5),
-            title='Legend', frameon=True,
-        )
-        self.fig_bode.subplots_adjust(right=0.78)
-    
-    def bode(self, test_current_id, live_results, current_results, len_measurement_queue):
-        """Wird in der Schleife aufgerufen: nur Daten austauschen."""
-        #get processed data
-        self.processing_results(test_current_id = test_current_id,live_results = live_results, current_results = current_results, len_measurement_queue = len_measurement_queue)
-        #only create the figure if it doesn't exist or has been closed
-        if not hasattr(self, 'fig_bode') or not plt.fignum_exists(self.fig_bode.number):
-            self._init_bode_plot()
+        ax1 = fig.add_subplot(111)
+        ax2 = ax1.twinx()
 
-        #live results
-        #Calculate magnitude |Z| and phase from real and imaginary parts
+        if self.past_real and len(self.past_real) == len(self.past_imag):
+            past_mag = [math.hypot(r, i) for r, i in zip(self.past_real, self.past_imag)]
+            past_phase = [math.degrees(math.atan2(i, r)) for r, i in zip(self.past_real, self.past_imag)]
+            ax1.plot(self.past_frequencies, past_mag, "o", color="gray", alpha=0.2, markersize=3)
+            ax2.plot(self.past_frequencies, past_phase, "s", color="gray", alpha=0.2, markersize=3)
+
         impedance = [math.hypot(r, i) for r, i in zip(self.real, self.imag)]
         phase = [math.degrees(math.atan2(i, r)) for r, i in zip(self.real, self.imag)]
-        self.line_mag.set_data(self.frequencies, impedance)
-        self.line_phase.set_data(self.frequencies, phase)
 
-        #past results
-        if getattr(self, 'past_real', None):
-            past_impedance = [math.hypot(r, i) for r, i in zip(self.past_real, self.past_imag)]
-            past_phase = [math.degrees(math.atan2(i, r)) for r, i in zip(self.past_real, self.past_imag)]
-            self.line_past_mag.set_data(self.past_frequencies, past_impedance)
-            self.line_past_phase.set_data(self.past_frequencies, past_phase)
-        else:
-            self.line_past_mag.set_data([], [])
-            self.line_past_phase.set_data([], [])
+        line_mag, = ax1.plot(self.frequencies, impedance, "bo-", label=r"Betrag $|Z|$")
+        line_phase, = ax2.plot(self.frequencies, phase, "rs-", label=r"Phase $\phi$")
 
-        
-        #autoscale axis
-        self.ax_mag_bode.relim()
-        self.ax_mag_bode.autoscale_view()
+        ax1.set_xscale("log")
+        ax1.set_yscale("linear" if linear_y else "log")
+        ax1.set_xlabel("Frequenz $f$ / Hz")
+        ax1.set_ylabel(r"Betrag $|Z|$ / $\Omega$", color="b")
+        ax1.tick_params(axis="y", labelcolor="b", direction="in")
+        ax1.tick_params(axis="x", direction="in", which="both")
+        ax1.grid(True, which="both", linestyle="--", alpha=0.3)
 
-        self.fig_bode.canvas.draw()
-        self.fig_bode.canvas.flush_events()
+        ax2.set_ylabel(r"Phase $\phi$ / Grad", color="r")
+        ax2.tick_params(axis="y", labelcolor="r", direction="in")
 
-        
+        scale_label = "Linear Y" if linear_y else "Log-Log"
+        fig.suptitle(f"Bode-Diagramm ({scale_label})")
+
+        fig.legend(
+            handles=[line_mag, line_phase],
+            loc="upper right",
+            bbox_to_anchor=(0.90, 0.90),
+            frameon=True,
+        )
+        fig.tight_layout()
